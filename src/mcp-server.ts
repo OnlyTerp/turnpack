@@ -204,6 +204,8 @@ export function startMcpServer(): void {
             protocolVersion: requestedProto,
             capabilities: { tools: {} },
             serverInfo: { name: "turnpack", version: "0.1.0" },
+            instructions:
+              "Use pack for bundled search, globs, git status, and file slices in 1 call; batch for read-only multi-file scripts; ship for multi-file edits verified by tests with automatic rollback.",
           },
         });
         return;
