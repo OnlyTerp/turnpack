@@ -5,27 +5,32 @@ import { runDoctor } from "./cli/doctor.js";
 import { runEstimate } from "./cli/estimate.js";
 import { runInstaller } from "./cli/installer.js";
 import { startMcpServer } from "./mcp-server.js";
+import { VERSION } from "./version.js";
 
 function printHelp(): void {
   process.stdout.write(`
-turnpack v0.1.0 — Fewer back-and-forth AI turns.
-Local MCP context pack + test-gated multi-file ship with automatic rollback.
+turnpack v${VERSION} — fewer back-and-forth AI turns.
+A local MCP server: gather context in one call, ship multi-file edits behind your tests.
 
-Quickstart (no API keys required):
-  npx turnpack demo       Run a safe 1-second live sandbox walkthrough (0 repo changes)
-  npx turnpack init       Preview diff & wire Turnpack into Claude Code, Codex CLI, or OMP
-  npx turnpack doctor     Verify Node.js, compact MCP schema tokens, and .env secret shield
-  npx turnpack estimate   See how much daily/weekly AI waiting time fewer turns save
-  npx turnpack audit      Read-only scan of your local AI MCP configurations
-  npx turnpack uninstall  Cleanly remove only Turnpack entries from your configs
-  npx turnpack serve      Start the stdio MCP server (used automatically by your AI app)
+Try it (no API keys, nothing of yours is touched):
+  npx turnpack demo       Walk through pack, ship and batch in a throwaway temp repo
+  npx turnpack doctor     Check Node, the MCP handshake, the secret shield and the sandbox
+
+Set it up:
+  npx turnpack init       Preview, then add Turnpack to Claude Code, Codex CLI or OMP
+  npx turnpack audit      Read-only scan of the MCP servers your AI apps already load
+  npx turnpack uninstall  Remove only the entries init added
+
+Other:
+  npx turnpack estimate   Model the waiting time saved by fewer round trips
+  npx turnpack serve      Start the stdio MCP server (your AI app runs this for you)
 
 Examples:
-  npx turnpack init --yes
-  npx turnpack init --client cursor --experimental --yes
-  npx turnpack estimate --profile local
-  npx turnpack estimate --profile cold-cloud
-  npx turnpack estimate --ttft 0.5 --tps 35
+  npx turnpack init --dry-run
+  npx turnpack init --client cursor --yes
+  npx turnpack estimate --ttft 2 --tok-per-turn 300 --tps 40
+
+Docs: https://github.com/OnlyTerp/turnpack
 `);
 }
 
@@ -44,8 +49,8 @@ async function main(): Promise<void> {
     return;
   }
 
-  if (cmd === "--version" || cmd === "-v") {
-    process.stdout.write("0.1.0\n");
+  if (cmd === "--version" || cmd === "-v" || cmd === "version") {
+    process.stdout.write(`${VERSION}\n`);
     return;
   }
 
@@ -85,4 +90,7 @@ async function main(): Promise<void> {
   process.exitCode = 1;
 }
 
-void main();
+main().catch((err: unknown) => {
+  process.stderr.write(`turnpack: ${err instanceof Error ? err.message : String(err)}\n`);
+  process.exitCode = 1;
+});

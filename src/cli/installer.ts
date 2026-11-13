@@ -8,7 +8,7 @@ export interface PlannedFileChange {
   client: string;
   tier: "tier1" | "experimental";
   filePath: string;
-  action: "update" | "create" | "remove" | "unchanged";
+  action: "update" | "create" | "remove" | "unchanged" | "skipped";
   preview: string;
   nextContent: string | null;
 }
@@ -35,9 +35,14 @@ function readJsonRecord(filePath: string): Record<string, unknown> {
   if (!fs.existsSync(filePath)) return {};
   const text = fs.readFileSync(filePath, "utf8").trim();
   if (!text) return {};
-  const parsed = JSON.parse(text) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text) as unknown;
+  } catch (err) {
+    throw new Error(`not plain JSON (${err instanceof Error ? err.message : String(err)}); add the entry by hand`);
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`Expected JSON object in ${filePath}`);
+    throw new Error("expected a JSON object at the top level; add the entry by hand");
   }
   return parsed as Record<string, unknown>;
 }
@@ -148,6 +153,7 @@ function buildPlan(options: {
     client: string;
     tier: "tier1" | "experimental";
     detectDir: string;
+    configPath: string;
     plan: () => Omit<PlannedFileChange, "client" | "tier">;
   }> = [
     {
@@ -155,6 +161,7 @@ function buildPlan(options: {
       client: "Claude Code",
       tier: "tier1",
       detectDir: path.join(homeDir, ".claude"),
+      configPath: path.join(homeDir, ".claude.json"),
       plan: () => {
         const filePath = path.join(homeDir, ".claude.json");
         return { filePath, ...upsertJsonMcp(filePath, "mcpServers", stdMcpEntry, mode) };
@@ -165,6 +172,7 @@ function buildPlan(options: {
       client: "Codex CLI",
       tier: "tier1",
       detectDir: path.join(homeDir, ".codex"),
+      configPath: path.join(homeDir, ".codex", "config.toml"),
       plan: () => {
         const filePath = path.join(homeDir, ".codex", "config.toml");
         return { filePath, ...upsertTomlMcp(filePath, mode) };
@@ -175,6 +183,7 @@ function buildPlan(options: {
       client: "OMP (oh-my-pi) MCP",
       tier: "tier1",
       detectDir: path.join(homeDir, ".omp"),
+      configPath: path.join(homeDir, ".omp", "agent", "mcp.json"),
       plan: () => {
         const filePath = path.join(homeDir, ".omp", "agent", "mcp.json");
         return { filePath, ...upsertJsonMcp(filePath, "mcpServers", stdMcpEntry, mode) };
@@ -185,6 +194,7 @@ function buildPlan(options: {
       client: "OMP Extension",
       tier: "tier1",
       detectDir: path.join(homeDir, ".omp"),
+      configPath: path.join(homeDir, ".omp", "agent", "extensions", "turnpack.ts"),
       plan: () => {
         const filePath = path.join(homeDir, ".omp", "agent", "extensions", "turnpack.ts");
         const existed = fs.existsSync(filePath);
@@ -210,6 +220,7 @@ function buildPlan(options: {
       client: "Cursor (experimental MCP)",
       tier: "experimental",
       detectDir: path.join(homeDir, ".cursor"),
+      configPath: path.join(homeDir, ".cursor", "mcp.json"),
       plan: () => {
         const filePath = path.join(homeDir, ".cursor", "mcp.json");
         return { filePath, ...upsertJsonMcp(filePath, "mcpServers", stdMcpEntry, mode) };
@@ -220,6 +231,7 @@ function buildPlan(options: {
       client: "Gemini CLI (experimental MCP)",
       tier: "experimental",
       detectDir: path.join(homeDir, ".gemini"),
+      configPath: path.join(homeDir, ".gemini", "settings.json"),
       plan: () => {
         const filePath = path.join(homeDir, ".gemini", "settings.json");
         return { filePath, ...upsertJsonMcp(filePath, "mcpServers", stdMcpEntry, mode) };
@@ -230,6 +242,7 @@ function buildPlan(options: {
       client: "OpenCode (experimental MCP)",
       tier: "experimental",
       detectDir: path.join(homeDir, ".config", "opencode"),
+      configPath: path.join(homeDir, ".config", "opencode", "opencode.json"),
       plan: () => {
         const filePath = path.join(homeDir, ".config", "opencode", "opencode.json");
         return { filePath, ...upsertJsonMcp(filePath, "mcp", openCodeEntry, mode) };
@@ -240,6 +253,7 @@ function buildPlan(options: {
       client: "Grok CLI (experimental MCP)",
       tier: "experimental",
       detectDir: path.join(homeDir, ".grok"),
+      configPath: path.join(homeDir, ".grok", "config.toml"),
       plan: () => {
         const filePath = path.join(homeDir, ".grok", "config.toml");
         return { filePath, ...upsertTomlMcp(filePath, mode) };
@@ -265,15 +279,46 @@ function buildPlan(options: {
       continue;
     }
 
-    const built = target.plan();
-    changes.push({
-      client: target.client,
-      tier: target.tier,
-      ...built,
-    });
+    try {
+      changes.push({ client: target.client, tier: target.tier, ...target.plan() });
+    } catch (err) {
+      // A config we cannot parse (comments, a syntax slip) is left exactly as it is. Rewriting
+      // it from a failed parse is how installers eat people's settings.
+      changes.push({
+        client: target.client,
+        tier: target.tier,
+        filePath: target.configPath,
+        action: "skipped",
+        preview: `Left untouched: ${err instanceof Error ? err.message : String(err)}`,
+        nextContent: null,
+      });
+    }
   }
 
   return changes;
+}
+
+/**
+ * Replaces a config file in one step: the new content is written beside it and renamed over
+ * it, so an interruption leaves either the old file or the new one, never half of each.
+ */
+function writeFileAtomic(filePath: string, content: string): void {
+  const tmpPath = `${filePath}.turnpack.tmp`;
+  let mode: number | undefined;
+  try {
+    mode = fs.statSync(filePath).mode & 0o7777;
+  } catch {
+    mode = undefined;
+  }
+  fs.writeFileSync(tmpPath, content, mode === undefined ? { encoding: "utf8" } : { encoding: "utf8", mode });
+  try {
+    fs.renameSync(tmpPath, filePath);
+  } catch {
+    // Windows refuses to rename over a file another program holds open. The backup already
+    // exists at this point, so a plain overwrite is the safe fallback.
+    fs.rmSync(tmpPath, { force: true });
+    fs.writeFileSync(filePath, content, "utf8");
+  }
 }
 
 async function promptConfirm(question: string): Promise<boolean> {
@@ -316,13 +361,15 @@ export async function runInstaller(
   }
 
   const changes = buildPlan({ homeDir, mode, includeExperimental, clientFilter });
-  const pending = changes.filter((c) => c.action !== "unchanged");
+  const pending = changes.filter((c) => c.action !== "unchanged" && c.action !== "skipped");
 
   process.stdout.write(`\nturnpack ${mode} (home: ${homeDir})\n`);
   process.stdout.write("─────────────────────────────────────────────────────────────────\n");
   if (changes.length === 0) {
     process.stdout.write(
-      "  No supported client config folders detected.\n  Pass --client claude|codex|omp (or --experimental) to configure explicitly.\n\n",
+      "  No supported AI app config found in this home directory.\n" +
+        "  Name one explicitly: --client claude | codex | omp | cursor | gemini | opencode | grok\n" +
+        "  or copy a snippet from https://github.com/OnlyTerp/turnpack#set-it-up\n\n",
     );
     return { applied: false, changes };
   }
@@ -335,8 +382,13 @@ export async function runInstaller(
   process.stdout.write("─────────────────────────────────────────────────────────────────\n");
 
   if (pending.length === 0) {
-    process.stdout.write("  Everything is already clean and up to date.\n\n");
-    return { applied: true, changes };
+    const skipped = changes.some((c) => c.action === "skipped");
+    process.stdout.write(
+      skipped
+        ? "  Nothing to apply. The file(s) marked SKIPPED above were left untouched.\n\n"
+        : "  Everything is already clean and up to date.\n\n",
+    );
+    return { applied: !skipped, changes };
   }
 
   if (dryRun) {
@@ -369,10 +421,14 @@ export async function runInstaller(
       if (fs.existsSync(ch.filePath)) {
         fs.copyFileSync(ch.filePath, `${ch.filePath}.turnpack.bak`);
       }
-      fs.writeFileSync(ch.filePath, ch.nextContent, "utf8");
+      writeFileAtomic(ch.filePath, ch.nextContent);
     }
   }
 
-  process.stdout.write(`  Applied ${pending.length} change(s). Next: npx turnpack doctor\n\n`);
+  process.stdout.write(
+    mode === "init"
+      ? `  Applied ${pending.length} change(s). Restart your AI app so it loads Turnpack, then check with: npx turnpack doctor\n\n`
+      : `  Removed ${pending.length} Turnpack entr${pending.length === 1 ? "y" : "ies"}. Backups are next to each file as *.turnpack.bak\n\n`,
+  );
   return { applied: true, changes };
 }

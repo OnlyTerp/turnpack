@@ -11,10 +11,15 @@ const SAFE_ENV_NAMES = new Set([
   ".env.sample",
   ".env.template",
   ".env.schema",
+  ".env.defaults",
+  "example.env",
+  "sample.env",
+  "template.env",
 ]);
 
 const EXACT_SECRET_NAMES = new Set([
   ".env",
+  ".envrc",
   "id_rsa",
   "id_ed25519",
   "id_ecdsa",
@@ -23,10 +28,39 @@ const EXACT_SECRET_NAMES = new Set([
   ".npmrc",
   ".pypirc",
   ".netrc",
+  ".pgpass",
+  ".htpasswd",
+  ".dockercfg",
   "credentials.json",
+  "kubeconfig",
+  "secrets.json",
+  "secrets.yml",
+  "secrets.yaml",
+  "secrets.toml",
 ]);
 
-const SECRET_EXTENSIONS = [".pem", ".key", ".p12", ".pfx", ".kdbx"];
+const SECRET_EXTENSIONS = [
+  ".pem",
+  ".key",
+  ".p12",
+  ".pfx",
+  ".kdbx",
+  ".ppk",
+  ".jks",
+  ".keystore",
+  ".tfstate",
+  ".tfstate.backup",
+  ".tfvars",
+  ".env",
+];
+
+/** Directory-qualified secret files: matched on the last two path segments. */
+const SECRET_PARENT_AND_NAME = new Set([
+  ".aws/credentials",
+  ".docker/config.json",
+  ".kube/config",
+  ".git/config",
+]);
 
 export interface SafePathResult {
   absPath: string;
@@ -58,7 +92,28 @@ function realpathWithSuffix(targetPath: string): string {
   return path.resolve(realBase, ...trailing.reverse());
 }
 
+/**
+ * True when `target` is `base` itself or lives underneath it. Both arguments must already be
+ * real (symlink-resolved) absolute paths; comparison is case-insensitive on Windows.
+ */
+export function isInsideDir(base: string, target: string): boolean {
+  const compareBase = process.platform === "win32" ? base.toLowerCase() : base;
+  const compareTarget = process.platform === "win32" ? target.toLowerCase() : target;
+  const rel = path.relative(compareBase, compareTarget);
+  if (rel === "") return true;
+  return !(
+    rel === ".." ||
+    rel.startsWith(`..${path.sep}`) ||
+    rel.startsWith("../") ||
+    rel.startsWith("..\\") ||
+    path.isAbsolute(rel)
+  );
+}
+
 export function resolveSafePath(workspaceRoot: string, targetPath: string): SafePathResult {
+  if (typeof targetPath !== "string") {
+    throw new Error("ERR_INVALID_PATH: path must be a string");
+  }
   const workspaceReal = fs.realpathSync(workspaceRoot);
   const trimmed = targetPath.trim();
   if (!trimmed) {
@@ -70,19 +125,7 @@ export function resolveSafePath(workspaceRoot: string, targetPath: string): Safe
     : path.resolve(workspaceReal, trimmed);
 
   const resolvedCandidate = realpathWithSuffix(rawCandidate);
-  const compareBase = process.platform === "win32" ? workspaceReal.toLowerCase() : workspaceReal;
-  const compareTarget =
-    process.platform === "win32" ? resolvedCandidate.toLowerCase() : resolvedCandidate;
-
-  const checkRel = path.relative(compareBase, compareTarget);
-  if (
-    checkRel !== "" &&
-    (checkRel === ".." ||
-      checkRel.startsWith(`..${path.sep}`) ||
-      checkRel.startsWith("../") ||
-      checkRel.startsWith("..\\") ||
-      path.isAbsolute(checkRel))
-  ) {
+  if (!isInsideDir(workspaceReal, resolvedCandidate)) {
     throw new Error(
       `ERR_PATH_OUTSIDE_WORKSPACE: "${targetPath}" resolves outside workspace root "${workspaceReal}"`,
     );
@@ -127,11 +170,24 @@ export function isSecretPath(relPath: string): boolean {
     }
   }
 
-  if (normalized === ".aws/credentials" || normalized.endsWith("/.aws/credentials")) {
+  const parent = parts[parts.length - 2];
+  if (parent && SECRET_PARENT_AND_NAME.has(`${parent}/${base}`)) {
     return true;
   }
 
   return false;
+}
+
+/**
+ * Paths `ship` refuses to modify no matter what the caller passes, because changing them
+ * changes what runs later rather than what the code says:
+ * - `.turnpack.json` holds the verify allowlist, so an edit could switch the guardrail off.
+ * - anything inside `.git/` (hooks, config) executes on the next ordinary git command.
+ */
+export function isProtectedPath(relPath: string): boolean {
+  const normalized = relPath.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+  if (normalized === ".turnpack.json") return true;
+  return normalized === ".git" || normalized.startsWith(".git/");
 }
 
 export function getShardCacheDir(): string {

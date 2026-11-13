@@ -6,16 +6,30 @@ import { isSecretPath, resolveSafePath } from "./security.js";
 
 const execFileAsync = promisify(execFile);
 
+/** Directories that are never source: VCS internals, dependency trees, build output, caches. */
 export const SKIP_DIRS = new Set([
   ".git",
+  ".hg",
+  ".svn",
   "node_modules",
   "dist",
   "build",
-  ".next",
   "target",
-  ".venv",
-  "__pycache__",
   "coverage",
+  ".next",
+  ".nuxt",
+  ".svelte-kit",
+  ".turbo",
+  ".cache",
+  ".parcel-cache",
+  ".gradle",
+  ".venv",
+  "venv",
+  ".tox",
+  "__pycache__",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
 ]);
 
 export interface SymbolOutline {
@@ -36,6 +50,8 @@ export interface SearchOutput {
   redactedSecretFiles: string[];
   truncated: boolean;
   engine: "rg" | "node";
+  /** Set when the pattern could not be used as written (for example an invalid regex). */
+  note?: string;
 }
 
 export function isBinaryBuffer(buf: Buffer): boolean {
@@ -161,7 +177,9 @@ export function walkWorkspaceFiles(
   return { files, secretFiles, truncated };
 }
 
-function parseRgLines(
+const MAX_HIT_TEXT = 260;
+
+function parseRgOutput(
   stdout: string,
   allowSecrets: boolean,
   maxMatches: number,
@@ -170,13 +188,17 @@ function parseRgLines(
   const redactedSet = new Set<string>();
   let truncated = false;
 
-  for (const rawLine of stdout.split(/\r?\n/)) {
+  for (const rawLine of stdout.split("\n")) {
     if (!rawLine) continue;
-    const match = /^(.+?):(\d+):(.*)$/.exec(rawLine);
-    if (!match) continue;
-    const relPath = (match[1] ?? "").replace(/\\/g, "/").replace(/^\.\//, "");
-    const lineNum = Number(match[2] ?? "0");
-    const text = (match[3] ?? "").slice(0, 260);
+    // `--null` puts a NUL between the path and "line:text", so paths that themselves contain
+    // ":<digits>:" cannot be mis-split.
+    const nul = rawLine.indexOf("\0");
+    if (nul === -1) continue;
+    const rest = /^(\d+):(.*)$/s.exec(rawLine.slice(nul + 1));
+    if (!rest) continue;
+    const relPath = rawLine.slice(0, nul).replace(/\\/g, "/").replace(/^\.\//, "");
+    const lineNum = Number(rest[1] ?? "0");
+    const text = (rest[2] ?? "").replace(/\r$/, "").slice(0, MAX_HIT_TEXT);
     if (!allowSecrets && isSecretPath(relPath)) {
       redactedSet.add(relPath);
       continue;
@@ -191,76 +213,102 @@ function parseRgLines(
   return { hits, redactedSecretFiles: [...redactedSet], truncated };
 }
 
+interface ExecFailure {
+  code?: number | string | null;
+  stdout?: string;
+  stderr?: string;
+}
+
 export async function runSearch(
   workspaceRoot: string,
   pattern: string,
   options: { literal?: boolean; allowSecrets?: boolean; maxMatches?: number } = {},
 ): Promise<SearchOutput> {
   const allowSecrets = options.allowSecrets ?? false;
-  const maxMatches = Math.min(Math.max(options.maxMatches ?? 80, 1), 300);
+  const maxMatches = Math.min(Math.max(Math.trunc(options.maxMatches ?? 80) || 80, 1), 300);
 
   const rgArgs = [
     "--line-number",
     "--no-heading",
     "--color",
     "never",
+    "--null",
     "--hidden",
-    "--glob",
-    "!.git/**",
-    "--glob",
-    "!node_modules/**",
-    "--glob",
-    "!dist/**",
+    "--no-config",
+    "--no-require-git",
+    "--max-columns",
+    "400",
+    "--max-columns-preview",
+    "--max-filesize",
+    "1M",
   ];
-  if (options.literal) {
-    rgArgs.push("-F");
+  // ripgrep already honours .gitignore, so only the directories that are noise in every repo
+  // are excluded outright; SKIP_DIRS (a heuristic) is reserved for the gitignore-blind walker.
+  for (const dir of [".git", ".hg", ".svn", "node_modules"]) {
+    rgArgs.push("--glob", `!**/${dir}/**`);
   }
-  rgArgs.push(pattern, ".");
+  if (options.literal) {
+    rgArgs.push("--fixed-strings");
+  }
+  // `-e` plus `--` pin the pattern and the path as data. Without them a query that starts with
+  // "-" (a search for "--verbose", or a deliberate "--pre=...") is read by ripgrep as a flag.
+  rgArgs.push("-e", pattern, "--", ".");
 
+  let rgNote: string | undefined;
   try {
     const { stdout } = await execFileAsync("rg", rgArgs, {
       cwd: workspaceRoot,
       maxBuffer: 4 * 1024 * 1024,
       timeout: 10000,
+      windowsHide: true,
     });
-    const parsed = parseRgLines(stdout, allowSecrets, maxMatches);
-    return { ...parsed, engine: "rg" };
+    return { ...parseRgOutput(stdout, allowSecrets, maxMatches), engine: "rg" };
   } catch (err) {
-    const code = (err as { code?: number | string; stdout?: string }).code;
-    const stdout = (err as { stdout?: string }).stdout ?? "";
-    if (code === 1) {
+    const failure = err as ExecFailure;
+    const stdout = typeof failure.stdout === "string" ? failure.stdout : "";
+    if (failure.code === 1) {
       return { hits: [], redactedSecretFiles: [], truncated: false, engine: "rg" };
     }
-    if (typeof code === "number" && stdout) {
-      const parsed = parseRgLines(stdout, allowSecrets, maxMatches);
-      return { ...parsed, engine: "rg" };
+    if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
+      // More output than we buffer: keep the complete lines we did get and say so.
+      const complete = stdout.slice(0, stdout.lastIndexOf("\n") + 1);
+      return { ...parseRgOutput(complete, allowSecrets, maxMatches), truncated: true, engine: "rg" };
+    }
+    if (typeof failure.code === "number" && stdout) {
+      // Exit 2 with matches: some files were unreadable, the rest of the result is still valid.
+      return { ...parseRgOutput(stdout, allowSecrets, maxMatches), engine: "rg" };
+    }
+    if (failure.code === 2 && typeof failure.stderr === "string" && /regex parse error/i.test(failure.stderr)) {
+      rgNote = "ripgrep rejected the regex; used the JavaScript regex engine instead";
+    }
+    // Anything else (ripgrep missing, timeout): fall through to the built-in search.
+  }
+
+  let regex: RegExp | null = null;
+  if (!options.literal) {
+    try {
+      regex = new RegExp(pattern);
+    } catch (reErr) {
+      return {
+        hits: [],
+        redactedSecretFiles: [],
+        truncated: false,
+        engine: "node",
+        note: `invalid regex (${reErr instanceof Error ? reErr.message : String(reErr)}); fix the pattern or pass literal: true`,
+      };
     }
   }
 
-  // Pure-Node fallback when ripgrep is unavailable.
-  const regex = options.literal
-    ? null
-    : (() => {
-        try {
-          return new RegExp(pattern);
-        } catch {
-          return null;
-        }
-      })();
   const { files } = walkWorkspaceFiles(workspaceRoot, { maxFiles: 1500, allowSecrets });
   const hits: SearchHit[] = [];
   const redactedSet = new Set<string>();
   let truncated = false;
 
-  for (const relPath of files) {
-    if (!allowSecrets && isSecretPath(relPath)) {
-      redactedSet.add(relPath);
-      continue;
-    }
-    const { absPath } = resolveSafePath(workspaceRoot, relPath);
+  outer: for (const relPath of files) {
+    const secret = !allowSecrets && isSecretPath(relPath);
     let buf: Buffer;
     try {
-      buf = fs.readFileSync(absPath);
+      buf = fs.readFileSync(path.join(workspaceRoot, relPath));
     } catch {
       continue;
     }
@@ -269,17 +317,26 @@ export async function runSearch(
     for (let i = 0; i < lines.length; i++) {
       const lineText = lines[i] ?? "";
       const matched = regex ? regex.test(lineText) : lineText.includes(pattern);
-      if (matched) {
-        if (hits.length >= maxMatches) {
-          truncated = true;
-          return { hits, redactedSecretFiles: [...redactedSet], truncated, engine: "node" };
-        }
-        hits.push({ relPath, line: i + 1, text: lineText.slice(0, 260) });
+      if (!matched) continue;
+      if (secret) {
+        redactedSet.add(relPath);
+        continue outer;
       }
+      if (hits.length >= maxMatches) {
+        truncated = true;
+        break outer;
+      }
+      hits.push({ relPath, line: i + 1, text: lineText.slice(0, MAX_HIT_TEXT) });
     }
   }
 
-  return { hits, redactedSecretFiles: [...redactedSet], truncated, engine: "node" };
+  return {
+    hits,
+    redactedSecretFiles: [...redactedSet],
+    truncated,
+    engine: "node",
+    ...(rgNote ? { note: rgNote } : {}),
+  };
 }
 
 export function extractSymbols(content: string): SymbolOutline[] {
@@ -290,6 +347,7 @@ export function extractSymbols(content: string): SymbolOutline[] {
     /^(?:export\s+(?:default\s+)?)?(?:async\s+)?(function\*?|class|interface|type|enum)\s+([A-Za-z_$][\w$]*)|^(?:export\s+)?const\s+([A-Za-z_$][\w$]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/;
   const pyDecl = /^(\s*)(?:async\s+)?(def|class)\s+([A-Za-z_][\w]*)\b/;
   const rustDecl = /^(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?(fn|struct|enum|trait|impl)\s+([A-Za-z_][\w]*)/;
+  const goDecl = /^(func)\s+(?:\([^)]*\)\s*)?([A-Za-z_][\w]*)\s*[(\[]/;
 
   for (let idx = 0; idx < lines.length; idx++) {
     const raw = lines[idx] ?? "";
@@ -311,7 +369,7 @@ export function extractSymbols(content: string): SymbolOutline[] {
         name = jm[3];
       }
     } else {
-      const rm = rustDecl.exec(trimmed);
+      const rm = rustDecl.exec(trimmed) ?? goDecl.exec(trimmed);
       if (rm && rm[1] && rm[2]) {
         kind = rm[1];
         name = rm[2];
