@@ -107,8 +107,8 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>Turnpack TTFT &amp; Time-Saved Calculator</h1>
-    <p class="sub">Cloud APIs repeat <strong>2s–25s+ TTFT freezes</strong> and token streams between every tool call; dedicated local GPUs enjoy <strong>&lt;1s warm-KV TTFT</strong> but still stream every redundant turn. Slide in your setup below.</p>
+    <h1>Turnpack Time Calculator</h1>
+    <p class="sub">Every separate tool call costs a model turn: a wait for the first token, then the tokens themselves. This page is <strong>a model, not a benchmark</strong>. It multiplies the round trips you expect to avoid by your own per-turn latency. Set the sliders to what you actually see.</p>
 
     <div class="grid">
       <div class="card">
@@ -147,17 +147,17 @@
       </div>
 
       <div class="card">
-        <h2 style="margin-top:0">2. Estimated Dead Waiting Saved</h2>
+        <h2 style="margin-top:0">2. Modeled Waiting Time Saved</h2>
         <div class="big-num" id="wkOut">~6.0 hrs/wk</div>
-        <div id="moOut" style="color:var(--text);font-weight:600;">~25.8 hours/month reclaimed (~72.0 min/day)</div>
+        <div id="moOut" style="color:var(--text);font-weight:600;">~25.8 hours/month (~72.0 min/day), if the turn counts hold</div>
 
         <div class="split-grid">
           <div class="mini-box">
-            <div style="font-size:0.8rem;color:var(--red);font-weight:700;">TTFT FREEZES SKIPPED</div>
+            <div style="font-size:0.8rem;color:var(--red);font-weight:700;">FIRST-TOKEN WAITS AVOIDED</div>
             <div id="wkTtft" style="font-size:1.3rem;font-weight:800;">~2.0 hrs/wk</div>
           </div>
           <div class="mini-box">
-            <div style="font-size:0.8rem;color:var(--amber);font-weight:700;">TOKEN STREAM WAIT SKIPPED</div>
+            <div style="font-size:0.8rem;color:var(--amber);font-weight:700;">TOKEN STREAMING AVOIDED</div>
             <div id="wkStream" style="font-size:1.3rem;font-weight:800;">~4.0 hrs/wk</div>
           </div>
         </div>
@@ -173,7 +173,7 @@
           <div style="display:flex;justify-content:space-between;font-size:0.9rem;"><span>With Turnpack (pack + verified ship)</span><span id="tpMin" style="color:var(--green);font-weight:700;">24.0 min/day</span></div>
           <div class="bar-track"><div id="tpBar" class="bar-fill-green" style="width:25%"></div></div>
         </div>
-        <p class="note">Transparent formula: turns_saved × (TTFT + tokens_per_turn ÷ tok/s). Excludes extra time saved by automatic rollback when edits break tests or avoiding late-session 100k+ token TTFT spikes.</p>
+        <p class="note">Formula: turns_saved × (TTFT + tokens_per_turn ÷ tok/s). The turn counts under "Typical change scope" are assumptions for an agent that makes one tool call per turn; agents that already read files in parallel start lower. Not counted: turns spent repairing a half-applied edit, and the run time of your tests.</p>
       </div>
     </div>
 
@@ -271,7 +271,7 @@
       const streamWkHr = (n * turnsSaved * streamSec * d) / 3600;
 
       els.wkOut.textContent = `~${savedWkHr.toFixed(1)} hrs/wk`;
-      els.moOut.textContent = `~${savedMoHr.toFixed(1)} hours/month reclaimed (~${savedDayMin.toFixed(1)} min/day)`;
+      els.moOut.textContent = `~${savedMoHr.toFixed(1)} hours/month (~${savedDayMin.toFixed(1)} min/day), if the turn counts hold`;
       els.wkTtft.textContent = `~${ttftWkHr.toFixed(1)} hrs/wk`;
       els.wkStream.textContent = `~${streamWkHr.toFixed(1)} hrs/wk`;
       els.baseMin.textContent = `${baseDayMin.toFixed(1)} min/day`;

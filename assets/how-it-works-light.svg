@@ -20,19 +20,19 @@
 
   <!-- Step 1 -->
   <rect x="644" y="132" width="492" height="148" rx="14" fill="#F1F5F9" stroke="#0284C7" stroke-width="1.2"/>
-  <rect x="664" y="150" width="84" height="24" rx="6" fill="#E0F2FE"/>
-  <text x="706" y="166" text-anchor="middle" fill="#0284C7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700">STEP 1 · pack</text>
-  <text x="760" y="167" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">1 local call (~19ms engine)</text>
+  <rect x="664" y="150" width="118" height="24" rx="6" fill="#E0F2FE"/>
+  <text x="723" y="166" text-anchor="middle" fill="#0284C7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700">STEP 1 · pack</text>
+  <text x="796" y="167" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">one call, runs locally in milliseconds</text>
   <text x="664" y="198" fill="#0F172A" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="700">Gather everything the AI needs in one trip</text>
   <text x="664" y="224" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14">• Searches patterns + slices exact files &amp; functions together</text>
   <text x="664" y="246" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14">• Automatically shields .env, .pem &amp; private keys by default</text>
-  <text x="664" y="268" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14">• Splits giant outputs cleanly so your chat never overflows</text>
+  <text x="664" y="268" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14">• Caps the reply size; overflow goes to files, not your context</text>
 
   <!-- Step 2 -->
   <rect x="644" y="302" width="492" height="168" rx="14" fill="#F1F5F9" stroke="#059669" stroke-width="1.2"/>
-  <rect x="664" y="320" width="84" height="24" rx="6" fill="#ECFDF5"/>
-  <text x="706" y="336" text-anchor="middle" fill="#047857" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700">STEP 2 · ship</text>
-  <text x="760" y="337" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">All-or-nothing safety net</text>
+  <rect x="664" y="320" width="118" height="24" rx="6" fill="#ECFDF5"/>
+  <text x="723" y="336" text-anchor="middle" fill="#047857" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700">STEP 2 · ship</text>
+  <text x="796" y="337" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12">all-or-nothing</text>
   <text x="664" y="368" fill="#0F172A" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="17" font-weight="700">Apply multi-file edits + test in one boundary</text>
   <text x="664" y="394" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14">• Validates every file before writing anything to disk</text>
   <text x="664" y="416" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="14">• Runs your test / typecheck command right after writing</text>
