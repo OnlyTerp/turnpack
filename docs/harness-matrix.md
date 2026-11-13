@@ -1,25 +1,40 @@
-# Harness Compatibility Matrix (`v0.1.0`)
+# App compatibility
 
-Turnpack uses a **Two-Layer Harness Strategy** so any MCP-capable coding app works cleanly on Day 1 without risky dotfile tampering:
+Turnpack is a standard stdio MCP server, so any MCP-capable coding app can run it. What differs between apps is where the config lives and how much tool output they show the model before truncating.
 
-## Layer 1 — Standard Stdio MCP (Works Everywhere Day 1)
+## What is supported
 
-| AI App | Framing & Wire Support | Measured / Configured Inline Cap | Read Hint | Status |
-| :--- | :--- | ---: | :--- | :--- |
-| **Claude Code** | Stdio JSON-RPC (`\n` & `Content-Length`) | 24,000 bytes | `Read` | Verified Tier 1 |
-| **Codex CLI** | Stdio JSON-RPC | 32,000 bytes | `fs/read` | Verified Tier 1 |
-| **OMP (`oh-my-pi`)** | Stdio JSON-RPC + `ExtensionAPI` | 32,000 bytes | `read` | Verified Tier 1 |
-| **Cursor** | Stdio JSON-RPC | 20,000 bytes | `Read` | Layer 1 + `--experimental` |
-| **Gemini CLI** | Stdio JSON-RPC | 20,000 bytes | `read_file` | Layer 1 + `--experimental` |
-| **OpenCode** | Stdio JSON-RPC | 20,000 bytes | `Read` | Layer 1 + `--experimental` |
-| **Grok CLI** | Stdio JSON-RPC | 20,000 bytes | `Read` | Layer 1 + `--experimental` |
-| **Custom MCP Clients** | Stdio JSON-RPC | 12,000 bytes (`TURNPACK_MAX_INLINE_BYTES`) | `Read` | Layer 1 Manual Snippet |
+| App | Config file `init` writes | Inline reply cap | `init` support |
+| :--- | :--- | ---: | :--- |
+| **Claude Code** | `~/.claude.json` (`mcpServers`) | 24,000 bytes | Default |
+| **Codex CLI** | `~/.codex/config.toml` (`[mcp_servers.turnpack]`) | 32,000 bytes | Default |
+| **OMP (`oh-my-pi`)** | `~/.omp/agent/mcp.json`, plus `~/.omp/agent/extensions/turnpack.ts` | 32,000 bytes | Default |
+| **Cursor** | `~/.cursor/mcp.json` | 20,000 bytes | When named (`--client cursor`) |
+| **Gemini CLI** | `~/.gemini/settings.json` | 20,000 bytes | When named (`--client gemini`) |
+| **OpenCode** | `~/.config/opencode/opencode.json` (`mcp`) | 20,000 bytes | When named (`--client opencode`) |
+| **Grok CLI** | `~/.grok/config.toml` | 20,000 bytes | When named (`--client grok`) |
+| Anything else | Add the snippet from the README by hand | 12,000 bytes | Manual |
 
-## Layer 2 — Auto-Installer (`npx turnpack init`) & Hooks
+"Default" means `npx turnpack init` configures the app when it finds it. The other four are written only when you name them or pass `--experimental`: they get less testing here, so `init` does not touch them unasked. If a path is wrong for your version of the app, please open an issue.
 
-- **Verified Tier 1 (Default `npx turnpack init`):**
-  - **Claude Code:** writes `mcpServers.turnpack` into `~/.claude.json` cleanly with `.turnpack.bak` backup.
-  - **Codex CLI:** appends `[mcp_servers.turnpack]` to `~/.codex/config.toml` cleanly without touching sibling entries.
-  - **OMP (`oh-my-pi`):** updates `~/.omp/agent/mcp.json` and installs the standalone cache-safe TypeScript plugin (`extensions/omp-turnpack.ts`), which never registers `before_agent_start` system-prompt mutations.
-- **Experimental MCP-Only (`--experimental`):** registers ONLY the stdio MCP entry for **Cursor**, **Gemini CLI**, **OpenCode**, and **Grok CLI** while skipping fragile external hook dialect rewrites.
-- **Clean Removal:** `npx turnpack uninstall` removes only Turnpack-owned config entries and extensions.
+The inline cap is how much `pack` returns directly before moving the overflow to files. It is chosen from the client name in the MCP handshake. Override it with `TURNPACK_MAX_INLINE_BYTES` (4,000 to 44,000), or name the client yourself with `TURNPACK_CLIENT`.
+
+## How the workspace is chosen
+
+Turnpack confines itself to one workspace per server. It uses the first of:
+
+1. `TURNPACK_ROOT`
+2. the folders the app reports over MCP `roots` (Claude Code reports the project directory and any added with `--add-dir`)
+3. `CLAUDE_PROJECT_DIR` (set by Claude Code)
+4. the directory the app started the server in
+
+If your app starts MCP servers from your home directory and supports neither `roots` nor a project variable, set `TURNPACK_ROOT` in the server's `env` block.
+
+## What `init` does and does not do
+
+- Shows every change before making it, and asks unless you pass `--yes`. `--dry-run` only previews.
+- Copies each file to `<name>.turnpack.bak` before writing, and writes atomically.
+- Leaves a config it cannot parse (comments, a syntax slip) exactly as it found it and tells you.
+- Adds one MCP server entry per app. For OMP it also installs a small status-line extension that registers no prompt hooks.
+- Does not edit `CLAUDE.md`, `AGENTS.md` or other rules files, and does not install hooks. See [steering.md](steering.md) if you want either.
+- `npx turnpack uninstall` removes only the entries and files `init` added.

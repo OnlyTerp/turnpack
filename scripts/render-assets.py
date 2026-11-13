@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Generate adaptive light/dark SVG diagrams and a crisp terminal demo GIF for Turnpack."""
+"""Generate adaptive light/dark SVG diagrams and the terminal demo GIF for Turnpack.
+
+The GIF is not hand-written: it runs the built CLI (`node dist/cli.js demo` and `doctor`) and
+draws whatever those commands print, so the picture in the README cannot drift from the tool.
+Run `npm run build` first. Needs Pillow and ffmpeg.
+"""
 import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 ASSETS_DIR = REPO_ROOT / "assets"
-FRAMES_DIR = Path(os.environ.get("TURNPACK_STAGE_DIR", str(REPO_ROOT.parent / "scratch-frames"))) / "gif-frames"
+FRAMES_DIR = Path(os.environ.get("TURNPACK_STAGE_DIR") or tempfile.mkdtemp(prefix="turnpack-assets-")) / "gif-frames"
 
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 if FRAMES_DIR.exists():
@@ -177,19 +183,19 @@ def write_how_it_works_svg(theme: str) -> None:
 
   <!-- Step 1 -->
   <rect x="644" y="132" width="492" height="148" rx="14" fill="{p['card2']}" stroke="{p['cyan']}" stroke-width="1.2"/>
-  <rect x="664" y="150" width="84" height="24" rx="6" fill="{p['cyanBg']}"/>
-  <text x="706" y="166" text-anchor="middle" fill="{p['cyan']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">STEP 1 · pack</text>
-  <text x="760" y="167" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">1 local call (~19ms engine)</text>
+  <rect x="664" y="150" width="118" height="24" rx="6" fill="{p['cyanBg']}"/>
+  <text x="723" y="166" text-anchor="middle" fill="{p['cyan']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">STEP 1 · pack</text>
+  <text x="796" y="167" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">one call, runs locally in milliseconds</text>
   <text x="664" y="198" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">Gather everything the AI needs in one trip</text>
   <text x="664" y="224" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Searches patterns + slices exact files &amp; functions together</text>
   <text x="664" y="246" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Automatically shields .env, .pem &amp; private keys by default</text>
-  <text x="664" y="268" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Splits giant outputs cleanly so your chat never overflows</text>
+  <text x="664" y="268" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Caps the reply size; overflow goes to files, not your context</text>
 
   <!-- Step 2 -->
   <rect x="644" y="302" width="492" height="168" rx="14" fill="{p['card2']}" stroke="{p['green']}" stroke-width="1.2"/>
-  <rect x="664" y="320" width="84" height="24" rx="6" fill="{p['greenBg']}"/>
-  <text x="706" y="336" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">STEP 2 · ship</text>
-  <text x="760" y="337" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">All-or-nothing safety net</text>
+  <rect x="664" y="320" width="118" height="24" rx="6" fill="{p['greenBg']}"/>
+  <text x="723" y="336" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">STEP 2 · ship</text>
+  <text x="796" y="337" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">all-or-nothing</text>
   <text x="664" y="368" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">Apply multi-file edits + test in one boundary</text>
   <text x="664" y="394" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Validates every file before writing anything to disk</text>
   <text x="664" y="416" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Runs your test / typecheck command right after writing</text>
@@ -246,19 +252,19 @@ def write_ttft_tax_svg(theme: str) -> None:
   <text x="84" y="223" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13">Token Stream (Cloud &amp; Local): 225–450+ reasoning/tool tokens generated per step — plus raw dumps bloat VRAM KV cache.</text>
 
   <!-- Section B: 16 Calls vs 4 Calls -->
-  <text x="58" y="284" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">Normal Chatty Loop — 16 separate tool calls</text>
-  <text x="1142" y="284" text-anchor="end" fill="{p['red']}" font-family="{FONT_MONO}" font-size="13" font-weight="700">16 × (TTFT + token stream) = 2 to 13+ minutes waiting</text>
+  <text x="58" y="284" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">Example: one tool call per turn — 16 round trips</text>
+  <text x="1142" y="284" text-anchor="end" fill="{p['red']}" font-family="{FONT_MONO}" font-size="13" font-weight="700">16 × (TTFT + token stream) of waiting</text>
   <rect x="52" y="308" width="1096" height="52" rx="10" fill="{p['card']}" stroke="{p['border']}" stroke-width="1"/>
   {"".join(loop16_svg)}
   <text x="1030" y="339" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">16× PAID</text>
 
-  <text x="58" y="378" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">With Turnpack — 4 bundled calls (pack + ship)</text>
+  <text x="58" y="378" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">Same task as 4 bundled calls (pack + ship)</text>
   <rect x="52" y="390" width="1096" height="44" rx="10" fill="{p['card']}" stroke="{p['green']}" stroke-width="1.3"/>
   {"".join(loop4_svg)}
   <rect x="308" y="396" width="832" height="32" rx="6" fill="{p['greenBg']}"/>
-  <text x="724" y="417" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">12 extra turns skipped (~75% less waiting + cleaner context &amp; local VRAM KV cache)</text>
+  <text x="724" y="417" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">12 round trips that never happen: no TTFT, no token stream, less context used</text>
 
-  <text x="58" y="466" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Red = TTFT wait per call (2s–25s+ Cloud; &lt;1s Local)   ·   Amber = Token stream per call   ·   Green = Turns skipped with Turnpack</text>
+  <text x="58" y="466" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Illustration, not a measurement. Red = TTFT per call · Amber = token stream per call · Green = round trips avoided</text>
 </svg>
 """
     (ASSETS_DIR / f"ttft-tax-{theme}.svg").write_text(svg, encoding="utf-8")
@@ -314,25 +320,25 @@ def write_time_saved_svg(theme: str) -> None:
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" width="1200" height="640" role="img" aria-label="Time saved across Local GPU warm KV cache and Cloud TTFT speeds">
   <rect width="1200" height="640" rx="20" fill="{p['bg']}" stroke="{p['border']}" stroke-width="1.5"/>
 
-  <text x="58" y="48" fill="{p['title']}" font-family="{FONT_SANS}" font-size="24" font-weight="800">Real-World Waiting Time Saved: Local GPU vs. Cloud Providers (16t → 4t)</text>
-  <text x="58" y="74" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">Local GPUs enjoy sub-second TTFT but still stream every tool step; slow Cloud APIs multiply both TTFT freezes and tok/s waits:</text>
+  <text x="58" y="48" fill="{p['title']}" font-family="{FONT_SANS}" font-size="24" font-weight="800">Modeled Waiting Time: a 16-Round-Trip Task Done in 4</text>
+  <text x="58" y="74" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">A model, not a benchmark: round trips avoided × your per-turn latency. Your turn counts will differ, so plug in your own.</text>
 
   {"".join(bars_svg)}
 
   <!-- Weekly Impact Highlight Box -->
   <rect x="738" y="102" width="414" height="474" rx="16" fill="{p['card']}" stroke="{p['green']}" stroke-width="1.4"/>
   <rect x="762" y="124" width="366" height="28" rx="14" fill="{p['greenBg']}"/>
-  <text x="945" y="143" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">WEEKLY HOURS RECLAIMED (20 tasks/day · 5d/wk)</text>
-  <text x="762" y="174" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13.5">12 eliminated round-trips × 100 tasks/week:</text>
+  <text x="945" y="143" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">MODELED HOURS / WEEK (20 tasks/day · 5d/wk)</text>
+  <text x="762" y="174" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13.5">If each task really drops 12 round trips:</text>
 
   {"".join(wk_svg)}
 
   <text x="762" y="468" fill="{p['title']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">+ Built for Local GPUs &amp; Cloud alike:</text>
-  <text x="762" y="490" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Local GPU: &lt;1s TTFT; ~823-tok schema protects VRAM KV</text>
+  <text x="762" y="490" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Local GPU: ~1.1k-token tool schema, bounded replies</text>
   <text x="762" y="510" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Cloud API: skips cold-cache 100k+ prefill &amp; queues</text>
   <text x="762" y="530" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Both: skips 12× token streams &amp; broken half-edits</text>
 
-  <text x="58" y="612" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Transparent math: turns_saved × (TTFT + tokens_per_turn ÷ tok/s). Plug in your own setup with npx turnpack estimate.</text>
+  <text x="58" y="612" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Formula: turns_saved × (TTFT + tokens_per_turn ÷ tok/s). Use your own numbers: npx turnpack estimate</text>
 </svg>
 """
     (ASSETS_DIR / f"time-saved-{theme}.svg").write_text(svg, encoding="utf-8")
@@ -350,65 +356,81 @@ def load_font(size: int, mono: bool = False):
     return ImageFont.load_default()
 
 
+def capture_cli(*args: str) -> list[str]:
+    """Run the built CLI and return its output lines exactly as a user would see them."""
+    env = {**os.environ, "NO_COLOR": "1"}
+    for key in ("TURNPACK_ROOT", "CLAUDE_PROJECT_DIR", "TURNPACK_ALLOW_EXEC"):
+        env.pop(key, None)
+    cli = REPO_ROOT / "dist" / "cli.js"
+    if not cli.exists():
+        raise SystemExit("dist/cli.js not found: run `npm run build` before rendering assets")
+    done = subprocess.run(["node", str(cli), *args], check=True, capture_output=True, text=True, env=env)
+    return [line.rstrip() for line in done.stdout.strip("\n").split("\n")]
+
+
+def line_color(line: str) -> str:
+    stripped = line.strip()
+    if not stripped:
+        return "#94A3B8"
+    if set(stripped) == {"─"}:
+        return "#334155"
+    if "FAIL" in stripped:
+        return "#FDA4AF"
+    if stripped.startswith("->"):
+        return "#6EE7B7"
+    if stripped.startswith("[ok"):
+        return "#6EE7B7"
+    if stripped.startswith("[warn"):
+        return "#FDE68A"
+    if "passed" in stripped:
+        return "#10B981"
+    if stripped.startswith("turnpack"):
+        return "#F8FAFC"
+    return "#CBD5E1"
+
+
 def render_demo_gif() -> None:
-    width, height = 960, 540
-    f_mono = load_font(17, mono=True)
+    width, height = 960, 600
+    line_height = 27
+    f_mono = load_font(16, mono=True)
     f_title = load_font(15, mono=False)
 
-    full_demo_lines = [
-        ("#94A3B8", "turnpack live sandbox demo (isolated temp folder, 0 repo changes)"),
-        ("#475569", "─────────────────────────────────────────────────────────────────"),
-        ("#6EE7B7", "  [PASS] pack + secret shield        18ms  Bundled 2 files + .env shielded"),
-        ("#FDE68A", "  [PASS] ship rollback on test fail  62ms  Restored exact pre-edit SHA-256"),
-        ("#38BDF8", "  [PASS] ship verified 2-file edit   52ms  Applied 2 edits + tests passed"),
-        ("#6EE7B7", "  [PASS] batch read-only analysis     9ms  Outlined files; exec disabled"),
-        ("#475569", "─────────────────────────────────────────────────────────────────"),
-        ("#10B981", "  ALL CHECKS PASSED in 148ms. Next: npx turnpack init"),
-    ]
-    doctor_lines = [
-        ("#94A3B8", "turnpack doctor"),
-        ("#475569", "────────────────────────────────────────────────────────────"),
-        ("#6EE7B7", "  [OK  ] Node.js >= 22                      v24.16.0"),
-        ("#6EE7B7", "  [OK  ] ripgrep fast search                 ripgrep 15.1.0"),
-        ("#38BDF8", "  [OK  ] MCP stdio handshake + tools         pack, ship, batch (54ms)"),
-        ("#6EE7B7", "  [OK  ] Compact schema budget (< 1,500 tok) 3289 bytes (~823 tokens)"),
-        ("#6EE7B7", "  [OK  ] Default .env secret shield          active (blocked .env read)"),
-        ("#475569", "────────────────────────────────────────────────────────────"),
-        ("#F8FAFC", "  Ready for Claude Code, Codex CLI, OMP & Cursor."),
-    ]
+    demo_lines = capture_cli("demo")
+    doctor_lines = capture_cli("doctor")
 
-    scenes = [
-        {"cmd": "$ npx turnpack demo", "lines": full_demo_lines, "hold": 16, "animate": False},
-        {"cmd": "$ npx turnpack doctor", "lines": doctor_lines, "hold": 26, "animate": True},
-        {"cmd": "$ npx turnpack demo", "lines": full_demo_lines[:2], "hold": 8, "animate": True},
-        {"cmd": "$ npx turnpack demo", "lines": full_demo_lines[:3], "hold": 10, "animate": False},
-        {"cmd": "$ npx turnpack demo", "lines": full_demo_lines[:4], "hold": 10, "animate": False},
-        {"cmd": "$ npx turnpack demo", "lines": full_demo_lines, "hold": 18, "animate": False},
-    ]
+    # Reveal the demo two lines at a time (each tool prints a "did" line and a "->" result line).
+    header = 2
+    demo_reveals = [demo_lines[: header + 2 * n] for n in range(1, 6)] + [demo_lines]
+    scenes = [{"cmd": "$ npx turnpack demo", "lines": [], "hold": 4, "type": True}]
+    for shown in demo_reveals[:-1]:
+        scenes.append({"cmd": "$ npx turnpack demo", "lines": shown, "hold": 9, "type": False})
+    scenes.append({"cmd": "$ npx turnpack demo", "lines": demo_lines, "hold": 34, "type": False})
+    scenes.append({"cmd": "$ npx turnpack doctor", "lines": [], "hold": 4, "type": True})
+    scenes.append({"cmd": "$ npx turnpack doctor", "lines": doctor_lines, "hold": 40, "type": False})
 
     frame_idx = 0
     for scene in scenes:
         cmd_text = scene["cmd"]
-        step_lengths = [6, 13, len(cmd_text)] if scene["animate"] else [len(cmd_text)]
-        for cut in step_lengths:
+        cuts = [2, 8, 14, len(cmd_text)] if scene["type"] else [len(cmd_text)]
+        for cut in cuts:
             img = Image.new("RGB", (width, height), "#090D16")
             draw = ImageDraw.Draw(img)
-            # Outer card + terminal chrome
-            draw.rounded_rectangle([24, 20, width - 24, height - 20], radius=16, fill="#0F172A", outline="#1E293B", width=2)
-            draw.rounded_rectangle([24, 20, width - 24, 62], radius=16, fill="#162033")
-            draw.rectangle([24, 48, width - 24, 62], fill="#162033")
-            draw.ellipse([44, 34, 56, 46], fill="#EF4444")
-            draw.ellipse([64, 34, 76, 46], fill="#F59E0B")
-            draw.ellipse([84, 34, 96, 46], fill="#10B981")
-            draw.text((120, 32), "turnpack — local zero-key MCP workflow", fill="#94A3B8", font=f_title)
+            draw.rounded_rectangle([20, 16, width - 20, height - 16], radius=16, fill="#0F172A", outline="#1E293B", width=2)
+            draw.rounded_rectangle([20, 16, width - 20, 58], radius=16, fill="#162033")
+            draw.rectangle([20, 44, width - 20, 58], fill="#162033")
+            draw.ellipse([40, 30, 52, 42], fill="#EF4444")
+            draw.ellipse([60, 30, 72, 42], fill="#F59E0B")
+            draw.ellipse([80, 30, 92, 42], fill="#10B981")
+            draw.text((116, 28), "turnpack — real output of the commands shown", fill="#94A3B8", font=f_title)
 
-            draw.text((48, 86), cmd_text[:cut] + (" _" if cut < len(cmd_text) else ""), fill="#F8FAFC", font=f_mono)
+            typed = cut < len(cmd_text)
+            draw.text((44, 78), cmd_text[:cut] + ("▌" if typed else ""), fill="#F8FAFC", font=f_mono)
 
-            if cut == len(cmd_text):
-                ly = 128
-                for color, line in scene["lines"]:
-                    draw.text((48, ly), line, fill=color, font=f_mono)
-                    ly += 34
+            if not typed:
+                ly = 78 + line_height + 6
+                for line in scene["lines"]:
+                    draw.text((44, ly), line, fill=line_color(line), font=f_mono)
+                    ly += line_height
                 repeats = scene["hold"]
             else:
                 repeats = 2

@@ -1,43 +1,66 @@
-# How Time-Saved Estimates Are Calculated
+# How the time estimates are calculated
 
-Turnpack never invents synthetic speedup percentages. Every time-saved chart and CLI estimate (`npx turnpack estimate` and [docs/calculator.html](calculator.html)) uses an explicit two-part latency formula matching what actually happens between AI tool calls:
+Every time figure in this project (`npx turnpack estimate`, the [interactive calculator](calculator.html) and the chart in the README) comes from one formula. It is a model, not a benchmark: it turns assumptions you can see and change into a number.
 
 ```text
-seconds_per_turn = ttft_seconds + (tokens_per_turn / tokens_per_second)
+seconds_per_turn     = ttft_seconds + (tokens_per_turn / tokens_per_second)
 turns_saved_per_task = baseline_turns - turnpack_turns
-minutes_saved_per_day = (prompts_per_day × turns_saved_per_task × seconds_per_turn) / 60
-hours_saved_per_week = (minutes_saved_per_day × days_per_week) / 60
+minutes_saved_per_day = (tasks_per_day × turns_saved_per_task × seconds_per_turn) / 60
+hours_saved_per_week  = (minutes_saved_per_day × days_per_week) / 60
 hours_saved_per_month = hours_saved_per_week × 4.3
 ```
 
-## Why TTFT + Token Speed Compound
+## Why a turn costs what it costs
 
-When an AI calls 16 small tools sequentially, you do not just wait for local disk I/O (~20ms) — you pay:
-1. **Time to First Token (`TTFT`)**: dedicated local GPUs (`llama.cpp`, `Ollama`, `vLLM`, `LM Studio`, `MLX`) with warm in-VRAM KV cache hit **sub-second (`~0.2s–1s`) TTFT** with zero queue, whereas congested cloud APIs, cold-cache stateless routers re-prefilling 100k+ tokens, and extended-thinking endpoints pause **`2s–25s+`** before emitting a single character.
-2. **Thinking & Token Streaming (`tokens_per_turn ÷ tok/s`)**: both local and cloud models still generate intermediate reasoning and JSON arguments token-by-token on every step — while bloated tool responses risk evicting local VRAM KV cache.
+Reading a file takes milliseconds. The turn around it does not. Each separate tool call makes the model produce a new response, and that has two parts:
 
-## Reference Provider Profiles
+1. **Time to first token.** The request is queued, the context is processed, and any thinking happens before output starts. On a local GPU with a warm cache this is often under a second. On a busy cloud API or with a cold cache it can be many seconds.
+2. **Generation.** The model writes its reasoning and the tool call's arguments token by token, at whatever speed your provider or hardware delivers.
 
-| Profile (`--profile`) | TTFT / Call | Tokens / Intermediate Turn | Stream Speed | Total Wait / Turn | Weekly Saved (`20` medium tasks/d, `5d/wk`) |
-| :--- | ---: | ---: | ---: | ---: | ---: |
-| `local` (Local GPU, Warm KV Cache) | 0.5s | 330 tok | 30 tok/s (`11s`) | `11.5s/turn` | `~3.8 hrs/wk` |
-| `fast` (Fast Cloud API, Warm Cache) | 2s | 225 tok | 45 tok/s (`5s`) | `7s/turn` | `~2.3 hrs/wk` |
-| `frontier` *(default)* (Frontier Cloud Reasoning) | 6s | 360 tok | 30 tok/s (`12s`) | `18s/turn` | `~6.0 hrs/wk` |
-| `high-ttft` (High-TTFT / Busy Cloud API) | 15s | 400 tok | 20 tok/s (`20s`) | `35s/turn` | `~11.7 hrs/wk` |
-| `cold-cloud` (Cold-Cache Cloud Router / Max Thinking) | 25s | 450 tok | 18 tok/s (`25s`) | `50s/turn` | `~16.7 hrs/wk` |
+Fewer tool calls means fewer of both.
 
-## Task Scope Profiles (`--size`)
+## The assumptions, and how far to trust them
 
-| Profile | Normal Round-Trips | Turnpack Round-Trips | Typical Scope |
+**Latency profiles** (`--profile`). These are example values, chosen to span the range people report. They are not measurements of any named provider.
+
+| Profile | Time to first token | Tokens per turn | Speed | One turn |
+| :--- | ---: | ---: | ---: | ---: |
+| `local` | 0.5s | 330 | 30 tok/s | 11.5s |
+| `fast` | 2s | 225 | 45 tok/s | 7s |
+| `frontier` (default) | 6s | 360 | 30 tok/s | 18s |
+| `high-ttft` | 15s | 400 | 20 tok/s | 35s |
+| `cold-cloud` | 25s | 450 | 18 tok/s | 50s |
+
+**Turn counts** (`--size`). These are the weakest part of the model, so treat them as placeholders for your own observations.
+
+| Size | Turns without | Turns with | Meant to represent |
 | :--- | ---: | ---: | :--- |
-| `small` | 8 turns | 2 turns | 3–5 file tweak + test run |
-| `medium` *(default)* | 16 turns | 4 turns | 6–10 file feature + verification |
-| `large` | 28 turns | 7 turns | 15+ file cross-module refactor |
+| `small` | 8 | 2 | A 3–5 file tweak and a test run |
+| `medium` (default) | 16 | 4 | A 6–10 file feature with verification |
+| `large` | 28 | 7 | A refactor across 15 or more files |
 
-Customize for your exact local or cloud setup anytime:
+The "without" column assumes an agent that makes one tool call per turn. Agents that issue several read or search calls in parallel start from a lower number, so the saving from `pack` is smaller for them. The "with" column assumes the agent actually uses `pack` and `ship` where it could, which depends on the model (see [steering.md](steering.md)).
+
+What the model leaves out, in both directions:
+
+- It does not count the turns an agent spends repairing a half-applied multi-file edit, which is what `ship` exists to prevent.
+- It does not count the time your verify command takes. That time is spent either way.
+- It counts waiting time only. Turnpack does not make the model think faster.
+
+## Use your own numbers
+
+Watch one ordinary task in your agent, count the round trips, and time a turn. Then:
 
 ```bash
-npx turnpack estimate --profile local
-npx turnpack estimate --profile cold-cloud
-npx turnpack estimate --ttft 0.5 --tok-per-turn 330 --tps 30
+npx turnpack estimate --ttft 2 --tok-per-turn 300 --tps 40 --size medium --prompts 15
 ```
+
+```bash
+npx turnpack estimate --turn-sec 9 --size small
+```
+
+`--json` prints the inputs and results for scripting.
+
+## What would make this a measurement
+
+A paired run: the same model, the same tasks and the same commit, with and without Turnpack, several times each. The protocol is in [bench/README.md](../bench/README.md). Results from anyone who runs it are welcome, including results that show no gain.

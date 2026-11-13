@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Local engine timings only: how long pack, batch and ship take on a generated workspace.
+// No model is involved, so this says nothing about how much faster an agent finishes a task.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -58,6 +60,8 @@ try {
   }
 
   const summary = {
+    node: process.version,
+    platform: `${process.platform} ${process.arch}`,
     fixtureFiles: 42,
     runsPerOp: 5,
     packMedianMs: median(packTimes),
