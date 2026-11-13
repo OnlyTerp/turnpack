@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { findShortNameAlias, isInsideDir, shortNameAliasBelow, windowsPathProblem } from "./security.js";
+import { expandShortNames, findShortNameAlias, isInsideDir, shortNameAliasBelow, windowsPathProblem } from "./security.js";
 
 /**
  * The set of directories a server instance is allowed to work in.
@@ -43,11 +43,12 @@ function realDirOrNull(candidate: string): string | null {
   }
 }
 
+/** A path with links resolved and Windows short names written out, for comparing two spellings of one place. */
 function realOrSelf(candidate: string): string {
   try {
-    return fs.realpathSync(candidate);
+    return expandShortNames(fs.realpathSync(candidate));
   } catch {
-    return path.resolve(candidate);
+    return expandShortNames(path.resolve(candidate));
   }
 }
 
@@ -139,7 +140,8 @@ export function applyClientRoots(policy: RootPolicy, uris: unknown): RootPolicy 
 const NO_WORKSPACE_HINT =
   "This server was not started inside a project and the app named none, so every call must pass root: the absolute path of the project directory. Setting TURNPACK_ROOT pins it instead.";
 
-function usesShortName(candidate: string): boolean {
+/** True if a path still reaches some entry through a short name after `expandShortNames`. */
+function stillAliased(candidate: string): boolean {
   try {
     const onDisk = fs.realpathSync.native(candidate);
     return findShortNameAlias(candidate, onDisk, candidate.split(/[\\/]+/).filter(Boolean).length) !== null;
@@ -162,11 +164,13 @@ function resolveNamedProject(requested: unknown): string {
       `ERR_NO_WORKSPACE: "${requested}" is not an absolute path, and there is no workspace to resolve it against. ${NO_WORKSPACE_HINT}`,
     );
   }
-  const candidate = path.resolve(trimmed);
-  const aliased =
-    process.platform === "win32" && (windowsPathProblem(trimmed) !== null || usesShortName(candidate));
-  const real = aliased ? null : realDirOrNull(candidate);
-  if (!real) {
+  // Short names are written out before anything is checked: Windows itself spells a temp or
+  // profile folder that way, and the checks below must see `.git`, not `GIT~1`. NTFS stream
+  // syntax and trailing dots have no honest use in a folder name, so those are refused.
+  const streamOrDot = process.platform === "win32" && windowsPathProblem(trimmed) !== null;
+  const expanded = streamOrDot ? null : realDirOrNull(expandShortNames(path.resolve(trimmed)));
+  const real = expanded === null ? null : expandShortNames(expanded);
+  if (!real || (process.platform === "win32" && stillAliased(real))) {
     throw new Error(
       `ERR_ROOT_NOT_A_DIRECTORY: "${requested}" is not an existing directory. Pass the real, absolute path of the project directory.`,
     );

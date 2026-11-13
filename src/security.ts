@@ -120,6 +120,41 @@ export function findShortNameAlias(typed: string, onDisk: string, count: number)
 }
 
 /**
+ * Rewrites every 8.3 short name in a Windows path to the name the file system stores, so
+ * `D:\work\RUNNER~1\project` becomes `D:\work\runneradmin\project`. The drive, and every
+ * segment that is not a short name, stay exactly as written. Segments that do not exist are
+ * kept as they are. Elsewhere than Windows this returns its argument.
+ *
+ * A short name is only a problem when a name check is about to be made on the path, because
+ * `GIT~1` is `.git` without being called `.git`. Expanding first means the checks that follow
+ * see the real names, which is stricter than refusing every path that has a short name in it:
+ * a profile folder with a long name is spelled that way by Windows itself in `%TEMP%`.
+ */
+export function expandShortNames(target: string): string {
+  if (process.platform !== "win32") return target;
+  const root = path.win32.parse(target).root;
+  let out = root;
+  for (const segment of target.slice(root.length).split(/[\\/]+/).filter(Boolean)) {
+    const typed = path.join(out, segment);
+    let name = segment;
+    if (/~\d/.test(segment)) {
+      try {
+        const stored = path.basename(fs.realpathSync.native(typed));
+        const viaStored = path.join(out, stored);
+        // Taken only when it is the same entry under its other name, not a link's target.
+        const a = fs.lstatSync(typed);
+        const b = fs.lstatSync(viaStored);
+        if (stored && a.ino === b.ino && a.dev === b.dev) name = stored;
+      } catch {
+        // Missing, or not readable: nothing to expand.
+      }
+    }
+    out = path.join(out, name);
+  }
+  return out;
+}
+
+/**
  * On Windows, the short-name alias (if any) that `resolved` uses below `baseReal`, else null.
  * Only the part that exists can be an alias; the names of files still to be created are new.
  */

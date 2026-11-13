@@ -9,6 +9,7 @@ import { runPack } from "../dist/index.js";
 import { applyClientRoots, configScope, createRootPolicy, isBroadDirectory, resolveToolRoot } from "../dist/roots.js";
 import { removeDir, trySymlink } from "./helpers.mjs";
 import {
+  expandShortNames,
   findShortNameAlias,
   getShardCacheDir,
   isInsideDir,
@@ -316,11 +317,22 @@ describe("security & confinement", () => {
     assert.throws(() => resolveToolRoot(unanchored, home), /ERR_ROOT_TOO_BROAD/);
     assert.throws(() => resolveToolRoot(unanchored, path.join(tmpRoot, "nope")), /ERR_ROOT_NOT_A_DIRECTORY/);
     assert.throws(() => resolveToolRoot(unanchored, 42), /must be a string/);
-    const real = fs.realpathSync(repoDir);
-    assert.equal(resolveToolRoot(unanchored, repoDir), real);
+    // A named project is accepted, and comes back under its real names. On GitHub's Windows
+    // runners the temp folder is spelled with a short name (the profile folder appears as
+    // RUNNER~1), which is a normal parent folder, not an attempt to hide one.
+    const named = resolveToolRoot(unanchored, repoDir);
+    assert.equal(fs.statSync(named).ino, fs.statSync(repoDir).ino);
+    if (process.platform === "win32") {
+      assert.equal(findShortNameAlias(named, fs.realpathSync.native(named), 64), null, named);
+      assert.equal(expandShortNames(named), named);
+      assert.equal(fs.statSync(expandShortNames(os.tmpdir())).ino, fs.statSync(os.tmpdir()).ino);
+    } else {
+      assert.equal(named, fs.realpathSync(repoDir));
+      assert.equal(expandShortNames("/tmp/GIT~1/x"), "/tmp/GIT~1/x");
+    }
     // Every directory above a named project is in scope for its verify allowlist.
-    assert.deepEqual(configScope(unanchored, real), [path.parse(real).root]);
-    assert.deepEqual(configScope(createRootPolicy(repoDir), real), [real]);
+    assert.deepEqual(configScope(unanchored, named), [path.parse(named).root]);
+    assert.deepEqual(configScope(createRootPolicy(repoDir), named), [fs.realpathSync(repoDir)]);
     // Folders reported by the client give such a server a normal workspace.
     assert.equal(applyClientRoots(unanchored, [{ uri: pathToFileURL(repoDir).href }]).source, "client");
   });

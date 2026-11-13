@@ -33,6 +33,7 @@ A server started in such a place, with nothing from the list above, has no works
 
 - A call without `root` is refused with `ERR_NO_WORKSPACE` and nothing is read.
 - A call must pass `root` as the absolute path of an existing directory. A too-broad directory is refused with `ERR_ROOT_TOO_BROAD`.
+- On Windows, 8.3 short names in that path are written out to the names the file system stores before anything is checked, so a folder reached as `GIT~1` is checked as `.git`. They are not refused outright, because Windows itself spells profile and temp folders that way: a profile folder called `runneradmin` shows up in `%TEMP%` as `RUNNER~1`. Stream syntax and trailing dots are still refused.
 - The call is confined to the directory it named, with every check described on this page applied inside it.
 - Every `.turnpack.json` from that directory up to the file system root is enforced, so naming a subdirectory is not a way out from under a project's verify allowlist.
 
