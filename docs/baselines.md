@@ -1,10 +1,28 @@
 # What the apps already do without Turnpack
 
-Turnpack's value is the difference between an app's default behaviour and the same app with Turnpack installed. This page records that default behaviour for Claude Code (CLI and the Claude desktop app's Code tab) and Codex (CLI and desktop app), so the rest of the docs do not claim credit for something the app already does.
+Turnpack's value is the difference between an app's default behaviour and the same app with Turnpack installed. This page records that default behaviour for Claude Code (CLI and the Claude desktop app's Code tab), Codex (CLI and desktop app), OMP (`oh-my-pi`) and Grok Build (xAI's `grok` CLI), so the rest of the docs do not claim credit for something the app already does.
 
-Checked on 2026-11-13 against Claude Code 2.1.323 (installed binary, official docs, `CHANGELOG.md`) and the `openai/codex` source at commit `69231e1`. Codex desktop-app details come from OpenAI's docs pages and GitHub issues as seen through search results, not from a direct read, and are marked as such. Both apps change often: re-check before quoting this page.
+Checked on 2026-11-13 against Claude Code 2.1.323 (installed binary, official docs, `CHANGELOG.md`), the `openai/codex` source at commit `69231e1`, the `can1357/oh-my-pi` source at `84f5adc`, and the `xai-org/grok-build` source at `2bdd1d6` (2026-09-29, about six weeks older than the current release). Codex desktop-app and Grok Build docs-site details come from search results, not a direct read, and are marked as such. All four apps change often: re-check before quoting this page.
 
-## Summary
+## At a glance
+
+| Default behaviour | Claude Code | Codex | OMP | Grok Build |
+| :--- | :---: | :---: | :---: | :---: |
+| Runs independent read/search calls in parallel | Yes | Yes (inside code-mode `exec`) | Yes | Yes |
+| Prompt tells the model to batch independent calls | Yes | Yes | Yes | Subagents only |
+| One read call returns several files | No | Yes, via `exec` | No (several ranges of one file) | No |
+| Script tool that calls the agent's tools | Opt-in (Code Mode, experimental) | Yes (`exec`, can write) | Yes (`eval`, can write) | Subagent orchestration only (`workflow`) |
+| Edits several files in one call | No | Yes (`apply_patch`) | Yes (`edit`) | No (`apply_patch` only in the non-default `codex` preset) |
+| All edits checked before any write | n/a | Yes | Yes | n/a |
+| Restores files if a write fails part-way | n/a | No | No | n/a |
+| Runs a test in the same call as the edit | No | Only if an `exec` script does it | No (LSP diagnostics after `write`) | No (LSP diagnostics as reminders) |
+| Automatically restores files when the test fails | **No** | **No** | **No** | **No** |
+| Manual undo of file changes | Yes (`/rewind`) | Desktop app only | No (checkpoint/rewind covers the conversation and is off by default) | Yes (`/rewind`) |
+| MCP tool schemas deferred | Yes | Not checked | Yes | Yes (model must call `search_tool` first) |
+
+"Automatically restores files when the test fails" is the row where Turnpack adds something to every app here. For the rest, see the details below.
+
+## Claude Code and Codex
 
 | Turnpack feature | Claude Code default | Codex default | Is Turnpack's version new? |
 | :--- | :--- | :--- | :--- |
@@ -17,21 +35,51 @@ Checked on 2026-11-13 against Claude Code 2.1.323 (installed binary, official do
 
 The Chat tab in Claude Desktop (not the Code tab) has no documented built-in tools for a local repository. Local file access there comes from MCP servers or desktop extensions. We could not confirm that there are none.
 
+## OMP (`oh-my-pi`)
+
+Source: `can1357/oh-my-pi` @ `84f5adc`, a fork of `badlogic/pi-mono`.
+
+- **Parallel calls: yes, by default.** The agent loop runs "shared" tools concurrently and "exclusive" ones (`edit`, `write`, `eval`) one at a time (`packages/agent/src/agent-loop.ts`). The system prompt says to "batch all independent reads/searches/checks into one turn" and to "parallelize independent calls" (`packages/coding-agent/src/prompts/system/system-prompt.md:99`). One exception: the Codex provider sends `parallel_tool_calls=false`.
+- **Reads:** `read` takes one path per call, though that path can carry several line ranges (`:5-16,960-973`), and the docs say to "issue one `read` per path" (`docs/tools/read.md`). `grep` and `glob` are separate default tools.
+- **Edits:** one `edit` call can change several files. Every section is parsed and checked before writes begin, but "an operating-system write failure can leave the already-landed prefix applied" (`docs/tools/edit.md:163`). `ast_edit` previews, then applies on accept.
+- **Scripting:** `eval` (JavaScript always, Python when an interpreter is found) is on by default and can call the agent's own tools, including MCP tools. It is not read-only: it has `write()` and can call `tool.edit` (`docs/tools/eval.md`).
+- **Undo and tests:** no automatic file rollback. `checkpoint`/`rewind` act on the conversation and are off by default. The only path that reverts files is the opt-in `/autoresearch` mode, through git. No test runs after edits by default; LSP diagnostics run after `write`.
+- **MCP:** built in. MCP tools are "discoverable" by default, so only a catalog goes in the prompt and schemas load on demand.
+- Upstream `pi` also runs tool calls in parallel by default and has an opt-in `codemode` JavaScript tool.
+
+**Is Turnpack's version new for OMP?** `pack`: partly (several whole files plus search, glob and git status in one call; OMP gets most of this through parallel calls or `eval`). `batch`: only in being read-only. `ship`: the multi-file edit and up-front checking already exist. What is new is running the test in the same call and restoring every file automatically when it fails or when a write fails part-way.
+
+## Grok Build (xAI `grok` CLI)
+
+Source: `xai-org/grok-build` @ `2bdd1d6`. This is the CLI that reads `~/.grok/config.toml`, which is where `turnpack init --client grok` writes. The community `superagent-ai/grok-cli` uses `~/.grok/user-settings.json` instead. "Grok Bot" is a separate hosted workplace agent, not a local CLI, and is out of scope here. Paths below are under `crates/codegen/`.
+
+- **Parallel calls: yes.** The CLI leaves `parallel_tool_calls` at the API default, and approved calls from one response run concurrently. Edits take an exclusive per-file lock. The main system prompt has no instruction to batch calls; the subagent prompt does.
+- **Reads:** `read_file` takes one path plus offset/limit (`xai-grok-tools/src/implementations/grok_build/read_file/mod.rs`). `grep` (ripgrep) and `list_dir` are separate.
+- **Edits:** `search_replace` makes one replacement in one file. A multi-file `apply_patch` exists only in the non-default `codex` tool preset.
+- **Scripting:** `workflow` runs Rhai scripts by default, but its functions start and coordinate subagents. It has no functions for reading repo files or calling tools directly.
+- **Undo and tests:** `/rewind` (also `/undo`) restores files and/or the conversation to a snapshot taken before each prompt. It is manual. No test runs after edits; LSP diagnostics come back as reminders where an LSP backend is available. Test hooks are opt-in.
+- **MCP:** configured under `[mcp_servers]` in `~/.grok/config.toml`. Schemas are deferred: the model is told it "MUST call `search_tool` first" before `use_tool` (`xai-grok-shell/src/session/acp_session_impl/mcp.rs:1495`). So the first Turnpack call in a Grok Build session costs one extra round trip.
+
+**Is Turnpack's version new for Grok Build?** `pack`: partly (calls already run in parallel, but each read is one file). `batch`: yes; no default tool runs a read-only script over the repo. `ship`: yes; there is no default multi-file edit, no edit-plus-test call, and no automatic restore.
+
 ## What this means for our claims
 
 Safe to say:
 
-- No default tool in Claude Code or Codex edits, tests and restores files automatically in one step. `ship` is the part of Turnpack with no built-in equivalent in either app.
+- No default tool in Claude Code, Codex, OMP or Grok Build edits, tests and restores files automatically in one step. `ship` is the part of Turnpack with no built-in equivalent in any of them.
+- Turnpack restores every file if a write fails part-way. Codex's `apply_patch` and OMP's multi-file `edit` check edits up front but can leave earlier files written.
 - Claude Code has no built-in tool that edits several files in one call, and its edits in a single turn are not applied as a unit.
 - Claude Code has no default read-only script tool. Code Mode is experimental and opt-in as of 2.1.323.
 - Turnpack gives the same tools to any MCP client and model, including ones without parallel calls or code mode.
 
 Not safe to say:
 
-- "Your agent makes one tool call per round trip." Neither app works that way by default. The 16 → 4 turn scenario in the README and calculator models an agent with no parallel calls, so it overstates the gain for both of these apps.
+- "Your agent makes one tool call per round trip." None of the four apps works that way by default. The 16 → 4 turn scenario in the README and calculator models an agent with no parallel calls, so it overstates the gain for all four.
 - "Codex can't batch reads" or "Codex has no scripting tool." Code mode does both, by default, for current models.
 - "Codex edits one file at a time" or "applies patches unchecked."
 - "Neither app has undo." Both have manual undo. What they lack is automatic rollback tied to a check.
+- That OMP lacks multi-file edits, up-front edit checking, a tool-calling script tool, or deferred MCP schemas, or that Grok Build lacks parallel calls, undo or any scripting. All of these exist.
+- "`batch` is the only scripting tool." Codex `exec` and OMP `eval` are on by default and can do more (including writes); `batch`'s distinction is that it is read-only and sandboxed.
 - Anything about Codex `read_file`, `grep_files`, `list_dir` or `/undo`. Those were removed.
 
 ## Known gaps in our own docs
@@ -40,8 +88,12 @@ Not safe to say:
 - `extensions/claude-hook.mjs` counts Read, Grep, Glob and Edit calls. On macOS, Linux and WSL, Claude Code leaves Grep and Glob out of its default tool set and searches through Bash, so the hook does not see those searches.
 - The README's "Prior art" credits Code Mode ideas but does not say that Codex now uses code mode by default.
 
+- `extensions/omp-turnpack.ts` counts OMP's `read`, `grep` and `edit` calls but not `glob` or `eval`.
+
 ## Sources
 
 Claude Code: `code.claude.com/docs/en/tools-reference` (Read, Edit, Glob/Grep defaults, tool list), `checkpointing` (what is tracked, manual restore), `mcp` (`readOnlyHint` and parallel calls; tool search), `hooks` and `best-practices` (test hooks are opt-in), `desktop` (worktree isolation off by default), `CHANGELOG.md` 2.1.323 (Code Mode), the installed binary (`CLAUDE_CODE_MAX_TOOL_USE_CONCURRENCY` defaults to 10; system prompt asks for parallel calls). Turnpack marks `pack` and `batch` with `readOnlyHint: true` (`src/mcp-server.ts`), so Claude Code runs them in parallel with other read-only calls.
 
 Codex (`openai/codex` @ `69231e1`): `codex-rs/models-manager/models.json` (models set to `code_mode_only`, prompt text including "Batch independent searches and reads in one functions.exec"), `codex-rs/core/src/tools/parallel.rs` and `tools/src/tool_executor.rs` (parallel-safe tools), `codex-rs/apply-patch/src/` (validate before write, no rollback on I/O error), `codex-rs/features/src/lib.rs` (ghost-commit `undo` marked removed), `codex-rs/app-server-protocol/src/protocol/v2/thread.rs` (`thread/revert` does not revert files). The bundled `models.json` is a fallback: the live models endpoint can override it. Desktop app: developers.openai.com/codex/app/review and /features, and openai/codex issue 28506 and discussion 9618.
+
+OMP (`can1357/oh-my-pi` @ `84f5adc`) and Grok Build (`xai-org/grok-build` @ `2bdd1d6`): file paths are given inline in their sections above. Grok Build's config location is also described at docs.x.ai/build/settings.

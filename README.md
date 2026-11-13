@@ -361,7 +361,7 @@ Turnpack builds on ideas from Anthropic's programmatic tool calling, Cloudflare'
 - [Recipes](docs/recipes/01-multi-file-rename.md): multi-file rename, verify allowlist, native Windows, when not to use it
 - [Steering your agent toward the tools](docs/steering.md)
 - [App compatibility matrix](docs/harness-matrix.md)
-- [What Claude Code and Codex already do without Turnpack](docs/baselines.md)
+- [What Claude Code, Codex, OMP and Grok Build already do without Turnpack](docs/baselines.md)
 - [Time model and calculator](docs/time-calculator.md) · [interactive version](docs/calculator.html)
 - [Benchmark protocol](bench/README.md)
 - [Security policy](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
