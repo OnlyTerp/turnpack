@@ -7,6 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import { isVerifyAllowed, runShip } from "../dist/index.js";
+import { removeDir } from "./helpers.mjs";
 
 function sha(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
@@ -25,9 +26,7 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
     );
   });
 
-  afterEach(() => {
-    fs.rmSync(repoDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-  });
+  afterEach(() => removeDir(repoDir));
 
   it("aborts before writing if any edit anchor is missing", async () => {
     const aBefore = sha(path.join(repoDir, "a.js"));

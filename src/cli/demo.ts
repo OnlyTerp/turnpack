@@ -6,6 +6,7 @@ import { runBatchDetailed } from "../tools/batch.js";
 import { runPack } from "../tools/pack.js";
 import { runShip } from "../tools/ship.js";
 import { bold, cyan, dim, green, red, rule } from "./style.js";
+import { removeTempDir } from "./tempdir.js";
 
 export interface DemoStep {
   tool: string;
@@ -191,7 +192,7 @@ export async function runDemo(options: { json?: boolean } = {}): Promise<DemoRep
       detail: "all three refused, nothing written",
     });
   } finally {
-    fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await removeTempDir(sandbox);
   }
 
   const report: DemoReport = {

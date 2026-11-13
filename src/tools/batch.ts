@@ -46,6 +46,7 @@ const PACKAGE_ROOT = path.resolve(HERE, "..", "..");
 const MAX_RESULT_BYTES = 48000;
 const MAX_EXEC_CAPTURE = 262144;
 const STARTUP_GRACE_MS = 10000;
+const RUNNER_EXIT_WAIT_MS = 2000;
 
 // Decided on first use and remembered: undefined = not tried yet.
 let permissionModelUsable: boolean | undefined;
@@ -125,7 +126,10 @@ function attemptRun(spec: RunSpec, usePermission: boolean): Promise<Attempt> {
     let child: ChildProcess;
     try {
       child = fork(RUNNER_PATH, [], {
-        cwd: spec.root,
+        // Not the workspace: every path the runner touches is resolved against spec.root
+        // explicitly, and on Windows a process pins its working directory, which would stop
+        // the workspace from being renamed or removed while (and just after) a script runs.
+        cwd: PACKAGE_ROOT,
         env: minimalEnv(),
         execArgv,
         stdio: ["ignore", "ignore", "pipe", "ipc"],
@@ -152,8 +156,19 @@ function attemptRun(spec: RunSpec, usePermission: boolean): Promise<Attempt> {
       clearTimeout(startupTimer);
       clearTimeout(runTimer);
       child.removeAllListeners("message");
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      resolveAttempt(attempt);
+      const finish = (): void => resolveAttempt(attempt);
+      const alreadyGone = child.exitCode !== null || child.signalCode !== null || child.pid === undefined;
+      if (alreadyGone) {
+        finish();
+        return;
+      }
+      // Return only once the runner is really gone, so no process of ours outlives the call.
+      const giveUp = setTimeout(finish, RUNNER_EXIT_WAIT_MS);
+      child.once("exit", () => {
+        clearTimeout(giveUp);
+        finish();
+      });
+      child.kill("SIGKILL");
     };
 
     const startupTimer = setTimeout(() => {

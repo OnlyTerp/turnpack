@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runBatchDetailed, type BatchIsolation } from "../tools/batch.js";
 import { bold, green, red, rule, yellow } from "./style.js";
+import { removeTempDir } from "./tempdir.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -233,7 +234,7 @@ export async function runDoctor(options: { json?: boolean } = {}): Promise<Docto
       detail: err instanceof Error ? err.message : String(err),
     });
   } finally {
-    fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    await removeTempDir(sandbox);
   }
 
   const report: DoctorReport = {

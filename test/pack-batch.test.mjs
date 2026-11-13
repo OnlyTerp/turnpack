@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { runBatch, runBatchDetailed, runPack } from "../dist/index.js";
+import { removeDir } from "./helpers.mjs";
 
 describe("pack and read-only batch", () => {
   let repoDir;
@@ -38,7 +39,7 @@ describe("pack and read-only batch", () => {
   after(() => {
     if (prevCache === undefined) delete process.env.TURNPACK_CACHE_DIR;
     else process.env.TURNPACK_CACHE_DIR = prevCache;
-    fs.rmSync(path.dirname(repoDir), { recursive: true, force: true });
+    return removeDir(path.dirname(repoDir));
   });
 
   it("pack bundles search, symbol slice, globs and redacts secrets by default", async () => {
@@ -292,6 +293,21 @@ describe("pack and read-only batch", () => {
       /batch timed out after 400ms/,
     );
     assert.equal(Date.now() - started < 5000, true);
+  });
+
+  it("batch leaves nothing holding the workspace once a call returns", async () => {
+    // On Windows a live process pins its working directory. The runner must not sit in the
+    // workspace, and must be gone by the time the call returns, or the folder cannot be removed.
+    for (const [code, timeout] of [
+      ["return ctx.files().length", 5000],
+      ["while (true) {}", 400],
+    ]) {
+      const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "turnpack-pin-"));
+      fs.writeFileSync(path.join(scratch, "a.js"), "export const a = 1;\n");
+      await runBatch({ cwd: scratch, code, timeout_ms: timeout }).catch(() => {});
+      fs.rmSync(scratch, { recursive: true });
+      assert.equal(fs.existsSync(scratch), false);
+    }
   });
 
   it("batch reports script errors and caps oversized results", async () => {

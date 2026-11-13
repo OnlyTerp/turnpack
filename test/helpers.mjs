@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
 
 export const CLI_PATH = path.resolve(import.meta.dirname, "..", "dist", "cli.js");
@@ -109,4 +110,19 @@ export function startSession({ cwd, env = {}, onServerRequest } = {}) {
 
 export function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Removes a test's temp directory. Windows will not delete a directory that a process which
+ * exited a moment ago still holds, so retry with real pauses instead of failing the suite.
+ */
+export async function removeDir(dir) {
+  for (let attempt = 1; attempt <= 10; attempt++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      return;
+    } catch {
+      await wait(100 * attempt);
+    }
+  }
 }

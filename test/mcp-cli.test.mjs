@@ -12,7 +12,7 @@ import {
   resolveClientContext,
   serverCommand,
 } from "../dist/index.js";
-import { CLI_PATH, startSession, wait } from "./helpers.mjs";
+import { CLI_PATH, removeDir, startSession, wait } from "./helpers.mjs";
 
 const PACKAGE_JSON = JSON.parse(
   fs.readFileSync(path.resolve(import.meta.dirname, "..", "package.json"), "utf8"),
@@ -105,9 +105,7 @@ describe("MCP server framing, schema budget & CLI lifecycle", () => {
     );
   });
 
-  after(() => {
-    fs.rmSync(fakeHome, { recursive: true, force: true });
-  });
+  after(() => removeDir(fakeHome));
 
   it("keeps compact 3-tool MCP schema under 5500 bytes and sets client caps accurately", () => {
     const schemaBytes = Buffer.byteLength(JSON.stringify(TOOLS), "utf8");
@@ -275,9 +273,7 @@ describe("MCP protocol behaviour", () => {
     fs.writeFileSync(path.join(outside, "secret.txt"), "outside-secret\n");
   });
 
-  after(() => {
-    fs.rmSync(base, { recursive: true, force: true });
-  });
+  after(() => removeDir(base));
 
   it("reports the package.json version, negotiates the protocol, and sends usage instructions", async () => {
     const session = startSession({ cwd: workspace });
@@ -554,9 +550,7 @@ describe("installer safety", () => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "turnpack-inst-"));
   });
 
-  after(() => {
-    fs.rmSync(home, { recursive: true, force: true });
-  });
+  after(() => removeDir(home));
 
   const run = (...args) =>
     execFileSync(process.execPath, [CLI_PATH, ...args, "--home", home], { encoding: "utf8" });

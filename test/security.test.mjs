@@ -5,6 +5,7 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import { applyClientRoots, createRootPolicy, resolveToolRoot } from "../dist/roots.js";
+import { removeDir } from "./helpers.mjs";
 import {
   getShardCacheDir,
   isInsideDir,
@@ -38,7 +39,7 @@ describe("security & confinement", () => {
     } else {
       process.env.TURNPACK_CACHE_DIR = prevCacheOverride;
     }
-    fs.rmSync(tmpRoot, { recursive: true, force: true });
+    return removeDir(tmpRoot);
   });
 
   it("allows workspace files including dot-prefixed filenames starting with ..", () => {
