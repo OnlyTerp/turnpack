@@ -26,7 +26,7 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
   });
 
   afterEach(() => {
-    fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(repoDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
   });
 
   it("aborts before writing if any edit anchor is missing", async () => {
@@ -333,6 +333,8 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
   });
 
   it("restores the workspace if the process is told to stop while verify is running", async () => {
+    // Windows has no termination signal a process can react to: kill() ends it outright.
+    if (process.platform === "win32") return;
     const script = path.join(repoDir, "interrupted.mjs");
     fs.writeFileSync(
       script,
@@ -356,11 +358,8 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
     child.kill("SIGTERM");
     await new Promise((resolve) => child.once("close", resolve));
 
-    if (process.platform !== "win32") {
-      // Windows terminates the process outright on kill(); there is no signal to react to.
-      assert.equal(sha(path.join(repoDir, "a.js")), aBefore);
-      assert.equal(fs.existsSync(path.join(repoDir, "half")), false);
-      assert.match(stderr, /SIGTERM during ship; restored 2 file\(s\)/);
-    }
+    assert.equal(sha(path.join(repoDir, "a.js")), aBefore);
+    assert.equal(fs.existsSync(path.join(repoDir, "half")), false);
+    assert.match(stderr, /SIGTERM during ship; restored 2 file\(s\)/);
   });
 });
