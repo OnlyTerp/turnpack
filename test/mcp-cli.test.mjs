@@ -5,7 +5,13 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
-import { SERVER_INSTRUCTIONS, TOOLS, VERSION, resolveClientContext } from "../dist/index.js";
+import {
+  SERVER_INSTRUCTIONS,
+  TOOLS,
+  VERSION,
+  resolveClientContext,
+  serverCommand,
+} from "../dist/index.js";
 import { CLI_PATH, startSession, wait } from "./helpers.mjs";
 
 const PACKAGE_JSON = JSON.parse(
@@ -357,6 +363,46 @@ describe("MCP protocol behaviour", () => {
     }
   });
 
+  it("keeps its guarantees when a call narrows its root to a sensitive directory", async () => {
+    const repo = path.join(base, "narrow");
+    fs.mkdirSync(path.join(repo, ".git", "hooks"), { recursive: true });
+    fs.mkdirSync(path.join(repo, ".aws"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".git", "config"), "[remote]\n\turl = https://user:GIT_TOKEN_VALUE@example.com/r.git\n");
+    fs.writeFileSync(path.join(repo, ".aws", "credentials"), "aws_secret_access_key = AWS_SECRET_VALUE\n");
+
+    const session = startSession({ cwd: repo });
+    try {
+      await session.initialize();
+
+      // Naming ".git" as cwd must not turn "hooks/pre-commit" into an ordinary file.
+      const hook = await session.call("ship", {
+        cwd: ".git",
+        writes: [{ path: "hooks/pre-commit", content: "#!/bin/sh\necho owned\n" }],
+      });
+      assert.equal(hook.isError, true);
+      assert.match(hook.text, /is protected/);
+      assert.deepEqual(fs.readdirSync(path.join(repo, ".git", "hooks")), []);
+
+      // Nor may it turn ".git/config" or ".aws/credentials" into unshielded bare names.
+      for (const [root, file, secret] of [
+        [".git", "config", "GIT_TOKEN_VALUE"],
+        [".aws", "credentials", "AWS_SECRET_VALUE"],
+      ]) {
+        const viaPack = await session.call("pack", { root, files: [file], query: "VALUE" });
+        assert.match(viaPack.text, /REDACTED SECRET FILE/);
+        assert.equal(viaPack.text.includes(secret), false, viaPack.text);
+
+        const viaBatch = await session.call("batch", {
+          cwd: root,
+          code: `return { read: ctx.read(${JSON.stringify(file)}), listed: ctx.files(), hits: await ctx.grep("VALUE") };`,
+        });
+        assert.equal(viaBatch.text.includes(secret), false, viaBatch.text);
+      }
+    } finally {
+      await session.close();
+    }
+  });
+
   it("honours TURNPACK_ROOT over the launch directory", async () => {
     const session = startSession({ cwd: outside, env: { TURNPACK_ROOT: workspace } });
     try {
@@ -446,6 +492,41 @@ describe("MCP protocol behaviour", () => {
     }
   });
 
+  it("applies the workspace's verify allowlist even when a call names a subdirectory as cwd", async () => {
+    const guarded = path.join(base, "guarded");
+    fs.mkdirSync(path.join(guarded, "pkg", "inner"), { recursive: true });
+    fs.writeFileSync(
+      path.join(guarded, ".turnpack.json"),
+      JSON.stringify({ enforceVerifyAllowlist: true, allowedVerify: ["node ok.mjs"] }),
+    );
+    fs.writeFileSync(path.join(guarded, "ok.mjs"), "process.exit(0);\n");
+    fs.writeFileSync(path.join(guarded, "pkg", "inner", "ok.mjs"), "process.exit(0);\n");
+    const marker = path.join(guarded, "pkg", "inner", "ran.txt");
+    const smuggle = "node -e \"require('fs').writeFileSync('ran.txt','x')\"";
+
+    const session = startSession({ cwd: guarded });
+    try {
+      await session.initialize();
+
+      // Stepping into a subdirectory must not step out from under the root's allowlist.
+      const fromSub = await session.call("ship", { cwd: "pkg/inner", verify: smuggle });
+      assert.equal(fromSub.isError, true);
+      assert.match(fromSub.text, /not in \.turnpack\.json allowedVerify/);
+      assert.equal(fs.existsSync(marker), false);
+
+      // Nor may a call plant a permissive config of its own further down.
+      const plant = await session.call("ship", {
+        writes: [{ path: "pkg/inner/.turnpack.json", content: "{}" }],
+      });
+      assert.match(plant.text, /is protected/);
+
+      const allowed = await session.call("ship", { cwd: "pkg/inner", verify: "node ok.mjs" });
+      assert.match(allowed.text, /SHIPPED_AND_VERIFIED/);
+    } finally {
+      await session.close();
+    }
+  });
+
   it("runs ship calls one at a time so concurrent ships cannot interleave", async () => {
     fs.writeFileSync(path.join(workspace, "counter.txt"), "0\n");
     const session = startSession({ cwd: workspace });
@@ -494,6 +575,22 @@ describe("installer safety", () => {
     assert.match(fs.readFileSync(path.join(home, ".codex", "config.toml"), "utf8"), /\[mcp_servers\.turnpack\]/);
   });
 
+  it("launches through cmd on Windows, where npx is a batch file, and directly elsewhere", () => {
+    assert.deepEqual(serverCommand("linux"), { command: "npx", args: ["-y", "turnpack", "serve"] });
+    assert.deepEqual(serverCommand("darwin"), { command: "npx", args: ["-y", "turnpack", "serve"] });
+    assert.deepEqual(serverCommand("win32"), {
+      command: "cmd",
+      args: ["/c", "npx", "-y", "turnpack", "serve"],
+    });
+
+    fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
+    run("init", "--client", "codex", "--yes");
+    const toml = fs.readFileSync(path.join(home, ".codex", "config.toml"), "utf8");
+    const expected = serverCommand();
+    assert.match(toml, new RegExp(`command = "${expected.command}"`));
+    assert.equal(toml.includes(`args = [${expected.args.map((a) => `"${a}"`).join(", ")}]`), true);
+  });
+
   it("previews without writing on --dry-run, backs up before writing, and is idempotent", () => {
     const claudePath = path.join(home, ".claude.json");
     const original = `${JSON.stringify({ numStartups: 7, mcpServers: { keep: { command: "echo" } } }, null, 2)}\n`;
@@ -507,7 +604,7 @@ describe("installer safety", () => {
     const written = JSON.parse(fs.readFileSync(claudePath, "utf8"));
     assert.equal(written.numStartups, 7);
     assert.deepEqual(written.mcpServers.keep, { command: "echo" });
-    assert.deepEqual(written.mcpServers.turnpack, { command: "npx", args: ["-y", "turnpack", "serve"] });
+    assert.deepEqual(written.mcpServers.turnpack, serverCommand());
     assert.equal(fs.readFileSync(`${claudePath}.turnpack.bak`, "utf8"), original);
     assert.equal(fs.existsSync(`${claudePath}.turnpack.tmp`), false);
 

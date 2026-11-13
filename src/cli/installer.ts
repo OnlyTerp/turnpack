@@ -18,6 +18,32 @@ export interface InstallerResult {
   changes: PlannedFileChange[];
 }
 
+/**
+ * The command an AI app should run to start the server.
+ *
+ * On Windows `npx` is a batch file (`npx.cmd`), and many MCP clients start servers without a
+ * shell, where a batch file is "program not found". Going through `cmd /c` works in all of
+ * them, so that is what gets written there.
+ */
+export function serverCommand(platform: NodeJS.Platform = process.platform): {
+  command: string;
+  args: string[];
+} {
+  const npx = ["npx", "-y", "turnpack", "serve"];
+  return platform === "win32"
+    ? { command: "cmd", args: ["/c", ...npx] }
+    : { command: "npx", args: npx.slice(1) };
+}
+
+function describeLaunch(): string {
+  const launch = serverCommand();
+  return [launch.command, ...launch.args].join(" ");
+}
+
+function tomlString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
 function getRepoRoot(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
   return path.resolve(here, "..", "..");
@@ -82,7 +108,7 @@ function upsertJsonMcp(
   return {
     action: existed ? "update" : "create",
     nextContent,
-    preview: `+ ${containerKey}.turnpack -> npx -y turnpack serve`,
+    preview: `+ ${containerKey}.turnpack -> ${describeLaunch()}`,
   };
 }
 
@@ -112,11 +138,12 @@ function upsertTomlMcp(
     };
   }
 
+  const launch = serverCommand();
   const block = [
     "# Added by turnpack",
     "[mcp_servers.turnpack]",
-    'command = "npx"',
-    'args = ["-y", "turnpack", "serve"]',
+    `command = ${tomlString(launch.command)}`,
+    `args = [${launch.args.map(tomlString).join(", ")}]`,
     "",
   ].join("\n");
 
@@ -128,7 +155,7 @@ function upsertTomlMcp(
   return {
     action: existed ? "update" : "create",
     nextContent,
-    preview: "+ [mcp_servers.turnpack] (npx -y turnpack serve)",
+    preview: `+ [mcp_servers.turnpack] -> ${describeLaunch()}`,
   };
 }
 
@@ -139,13 +166,14 @@ function buildPlan(options: {
   clientFilter?: string;
 }): PlannedFileChange[] {
   const { homeDir, mode, includeExperimental, clientFilter } = options;
+  const launch = serverCommand();
   const stdMcpEntry = (): Record<string, unknown> => ({
-    command: "npx",
-    args: ["-y", "turnpack", "serve"],
+    command: launch.command,
+    args: launch.args,
   });
   const openCodeEntry = (): Record<string, unknown> => ({
     type: "local",
-    command: ["npx", "-y", "turnpack", "serve"],
+    command: [launch.command, ...launch.args],
   });
 
   const targets: Array<{

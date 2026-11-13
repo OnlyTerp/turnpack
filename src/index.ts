@@ -5,6 +5,7 @@ export {
   type ShipArgs,
   type ShipEditChange,
   type ShipEditOp,
+  type ShipInternalOptions,
   type ShipResult,
   type ShipStatus,
   type ShipWriteOp,
@@ -39,3 +40,4 @@ export {
   type McpToolDefinition,
 } from "./mcp-server.js";
 export { VERSION } from "./version.js";
+export { serverCommand } from "./cli/installer.js";

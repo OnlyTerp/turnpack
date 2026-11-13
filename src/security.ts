@@ -136,11 +136,21 @@ export function resolveSafePath(workspaceRoot: string, targetPath: string): Safe
   return { absPath: resolvedCandidate, relPath };
 }
 
-export function isSecretPath(relPath: string): boolean {
-  const normalized = relPath.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
-  if (!normalized || normalized === ".") {
+/**
+ * Whether a path names a file that usually holds credentials.
+ *
+ * Pass `rootDir` (the directory `relPath` is relative to) whenever it is known. Some rules need
+ * the parent directory's name (`.aws/credentials`, `.git/config`), and a caller that has chosen
+ * `.aws` itself as its root would otherwise present that file as a bare `credentials`.
+ */
+export function isSecretPath(relPath: string, rootDir?: string): boolean {
+  const relNormalized = relPath.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
+  if (!relNormalized || relNormalized === ".") {
     return false;
   }
+  const normalized = rootDir
+    ? `${path.basename(rootDir).toLowerCase()}/${relNormalized}`
+    : relNormalized;
 
   const parts = normalized.split("/").filter(Boolean);
   const base = parts[parts.length - 1] ?? "";
@@ -182,12 +192,18 @@ export function isSecretPath(relPath: string): boolean {
  * Paths `ship` refuses to modify no matter what the caller passes, because changing them
  * changes what runs later rather than what the code says:
  * - `.turnpack.json` holds the verify allowlist, so an edit could switch the guardrail off.
- * - anything inside `.git/` (hooks, config) executes on the next ordinary git command.
+ * - anything inside a `.git/` directory (hooks, config) executes on the next ordinary git
+ *   command.
+ * Both are matched at any depth: a nested repository's hooks are as dangerous as the root's,
+ * and a `.turnpack.json` planted in a subdirectory must not be able to stand in for the real one.
+ *
+ * Callers should pass the absolute path. A path relative to the call's own root is not enough,
+ * because the caller chooses that root and could choose `.git` itself.
  */
-export function isProtectedPath(relPath: string): boolean {
-  const normalized = relPath.replace(/\\/g, "/").replace(/^\.\//, "").toLowerCase();
-  if (normalized === ".turnpack.json") return true;
-  return normalized === ".git" || normalized.startsWith(".git/");
+export function isProtectedPath(filePath: string): boolean {
+  const parts = filePath.replace(/\\/g, "/").toLowerCase().split("/").filter(Boolean);
+  if (parts.includes(".git")) return true;
+  return parts[parts.length - 1] === ".turnpack.json";
 }
 
 export function getShardCacheDir(): string {

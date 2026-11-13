@@ -98,7 +98,7 @@ function readSingleFileSection(
     // One bad path must not cost the caller every other file in the same pack.
     return `### FILE: ${spec.path}\n[BLOCKED: ${err instanceof Error ? err.message : String(err)}]`;
   }
-  if (!allowSecrets && isSecretPath(safe.relPath)) {
+  if (!allowSecrets && isSecretPath(safe.relPath, workspaceRoot)) {
     return `### FILE: ${safe.relPath}\n[REDACTED SECRET FILE: ${safe.relPath} — pass allow_secrets: true if intentional]`;
   }
 
@@ -213,7 +213,7 @@ export async function runPack(
         const matchers = globs.map(globToRegExp);
         const matched = walk.files.filter((rel) => matchers.some((rx) => rx.test(rel)));
         const lines = matched.slice(0, MAX_GLOB_LINES).map((rel) =>
-          !allowSecrets && isSecretPath(rel) ? `${rel} [secret-shielded]` : rel,
+          !allowSecrets && isSecretPath(rel, workspaceRoot) ? `${rel} [secret-shielded]` : rel,
         );
         const overflow =
           matched.length > MAX_GLOB_LINES ? `\n... (+${matched.length - MAX_GLOB_LINES} more files)` : "";
@@ -266,7 +266,7 @@ export async function runPack(
 
   if (tasks.length === 0) {
     const walk = walkWorkspaceFiles(workspaceRoot, { maxFiles: 120, allowSecrets });
-    const visible = walk.files.filter((rel) => allowSecrets || !isSecretPath(rel));
+    const visible = walk.files.filter((rel) => allowSecrets || !isSecretPath(rel, workspaceRoot));
     return [
       `## PACK OVERVIEW (${workspaceRoot})`,
       `Files (${visible.length}${walk.truncated ? "+" : ""}):`,

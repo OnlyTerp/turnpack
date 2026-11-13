@@ -165,7 +165,7 @@ export function walkWorkspaceFiles(
       if (stat.isDirectory()) {
         visit(safe.absPath);
       } else if (stat.isFile()) {
-        if (!allowSecrets && isSecretPath(safe.relPath)) {
+        if (!allowSecrets && isSecretPath(safe.relPath, workspaceRoot)) {
           secretFiles.push(safe.relPath);
         }
         files.push(safe.relPath);
@@ -181,6 +181,7 @@ const MAX_HIT_TEXT = 260;
 
 function parseRgOutput(
   stdout: string,
+  workspaceRoot: string,
   allowSecrets: boolean,
   maxMatches: number,
 ): { hits: SearchHit[]; redactedSecretFiles: string[]; truncated: boolean } {
@@ -199,7 +200,7 @@ function parseRgOutput(
     const relPath = rawLine.slice(0, nul).replace(/\\/g, "/").replace(/^\.\//, "");
     const lineNum = Number(rest[1] ?? "0");
     const text = (rest[2] ?? "").replace(/\r$/, "").slice(0, MAX_HIT_TEXT);
-    if (!allowSecrets && isSecretPath(relPath)) {
+    if (!allowSecrets && isSecretPath(relPath, workspaceRoot)) {
       redactedSet.add(relPath);
       continue;
     }
@@ -262,7 +263,7 @@ export async function runSearch(
       timeout: 10000,
       windowsHide: true,
     });
-    return { ...parseRgOutput(stdout, allowSecrets, maxMatches), engine: "rg" };
+    return { ...parseRgOutput(stdout, workspaceRoot, allowSecrets, maxMatches), engine: "rg" };
   } catch (err) {
     const failure = err as ExecFailure;
     const stdout = typeof failure.stdout === "string" ? failure.stdout : "";
@@ -272,11 +273,11 @@ export async function runSearch(
     if (failure.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") {
       // More output than we buffer: keep the complete lines we did get and say so.
       const complete = stdout.slice(0, stdout.lastIndexOf("\n") + 1);
-      return { ...parseRgOutput(complete, allowSecrets, maxMatches), truncated: true, engine: "rg" };
+      return { ...parseRgOutput(complete, workspaceRoot, allowSecrets, maxMatches), truncated: true, engine: "rg" };
     }
     if (typeof failure.code === "number" && stdout) {
       // Exit 2 with matches: some files were unreadable, the rest of the result is still valid.
-      return { ...parseRgOutput(stdout, allowSecrets, maxMatches), engine: "rg" };
+      return { ...parseRgOutput(stdout, workspaceRoot, allowSecrets, maxMatches), engine: "rg" };
     }
     if (failure.code === 2 && typeof failure.stderr === "string" && /regex parse error/i.test(failure.stderr)) {
       rgNote = "ripgrep rejected the regex; used the JavaScript regex engine instead";
@@ -305,7 +306,7 @@ export async function runSearch(
   let truncated = false;
 
   outer: for (const relPath of files) {
-    const secret = !allowSecrets && isSecretPath(relPath);
+    const secret = !allowSecrets && isSecretPath(relPath, workspaceRoot);
     let buf: Buffer;
     try {
       buf = fs.readFileSync(path.join(workspaceRoot, relPath));

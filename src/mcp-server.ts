@@ -328,7 +328,8 @@ export function startMcpServer(options: McpServerOptions = {}): void {
 
     if (toolName === "ship") {
       const cwd = resolveToolRoot(policy, rawArgs.cwd);
-      const run = shipQueue.then(() => runShip({ ...rawArgs, cwd } as ShipArgs));
+      const workspaceRoots = policy.roots;
+      const run = shipQueue.then(() => runShip({ ...rawArgs, cwd } as ShipArgs, { workspaceRoots }));
       shipQueue = run.catch(() => undefined);
       const res = await run;
       toolText(id, res.summary, res.status !== "SHIPPED_AND_VERIFIED" && res.status !== "APPLIED_NO_VERIFY");
