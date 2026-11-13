@@ -35,6 +35,6 @@ If your app starts MCP servers from your home directory and supports neither `ro
 - Shows every change before making it, and asks unless you pass `--yes`. `--dry-run` only previews.
 - Copies each file to `<name>.turnpack.bak` before writing, and writes atomically.
 - Leaves a config it cannot parse (comments, a syntax slip) exactly as it found it and tells you.
-- Adds one MCP server entry per app. For OMP it also installs a small status-line extension that registers no prompt hooks.
+- Adds one MCP server entry per app: `npx -y turnpack serve`, or `cmd /c npx -y turnpack serve` on Windows, where `npx` is a batch file that many apps cannot start directly. For OMP it also installs a small status-line extension that registers no prompt hooks.
 - Does not edit `CLAUDE.md`, `AGENTS.md` or other rules files, and does not install hooks. See [steering.md](steering.md) if you want either.
 - `npx turnpack uninstall` removes only the entries and files `init` added.

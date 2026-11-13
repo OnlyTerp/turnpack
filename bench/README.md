@@ -14,9 +14,9 @@ Reference run (Linux x64, Node 22.23, ripgrep 14.1):
 
 | Operation | Median |
 | :--- | ---: |
-| `pack`: a regex search, four files, one blocked `.env` | 7 ms |
-| `batch`: outline 40 files | 81 ms |
-| `ship`: a two-file edit plus a `node` verify | 36 ms |
+| `pack`: a regex search, four files, one blocked `.env` | about 8 ms |
+| `batch`: outline 40 files | about 80 ms |
+| `ship`: a two-file edit plus a `node` verify | about 35 ms |
 
 `batch` is the slowest because each call starts a fresh, permission-restricted Node process. That start-up is the price of the isolation, and it is small next to a model turn.
 

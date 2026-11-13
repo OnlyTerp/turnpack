@@ -203,6 +203,8 @@ npx turnpack init --client cursor --yes
 npx turnpack init --experimental --yes
 ```
 
+**On Windows**, `npx` is a batch file, and many apps cannot start one directly. Use `"command": "cmd"` with `"args": ["/c", "npx", "-y", "turnpack", "serve"]` in the snippets above. `init` writes that form for you on Windows.
+
 Config paths, inline size caps and status per app are in [docs/harness-matrix.md](docs/harness-matrix.md).
 
 </details>
@@ -290,10 +292,10 @@ These are measured, by `npm run bench` and `npx turnpack doctor --json` on Linux
 | | Measured | Notes |
 | :--- | ---: | :--- |
 | Tool schema in your context | 4,502 bytes, about 1,100 tokens | All three tools, plus about 170 tokens of instructions |
-| Server start and handshake | about 50 ms | Local stdio, no network |
-| `pack`: a search, four files and a blocked `.env` | 7 ms median | 42-file fixture |
-| `ship`: a two-file edit and a `node` verify | 36 ms median | Dominated by starting the verify command |
-| `batch`: outline 40 files | 81 ms median | Most of it is starting the isolated process |
+| Server start and handshake | 50–60 ms | Local stdio, no network |
+| `pack`: a search, four files and a blocked `.env` | about 8 ms | Median of 5 runs on a 42-file fixture |
+| `ship`: a two-file edit and a `node` verify | about 35 ms | Dominated by starting the verify command |
+| `batch`: outline 40 files | about 80 ms | Most of it is starting the isolated process |
 
 ## Safety
 
@@ -304,8 +306,8 @@ An agent that can edit files and run commands deserves fences. These are the one
 | **Workspace jail** | The workspace is fixed by the server, not by the model: `TURNPACK_ROOT`, else the folders your app reports over MCP `roots`, else `CLAUDE_PROJECT_DIR`, else the directory the server started in. A tool call can pick a subdirectory and nothing else. Symlinks are resolved before the check. | If your app starts the server in your home directory and names no project, your home directory is the workspace. Set `TURNPACK_ROOT` to be explicit. |
 | **Secret shield** | `.env*`, private keys, `.npmrc`, cloud credentials, Terraform state and [similar files](SECURITY.md) are redacted from `pack` and `batch` and refused by `ship`. | It matches file names, not contents, and the agent can pass `allow_secrets`. It prevents accidents; it is not a vault. |
 | **Read-only `batch`** | The script runs in a separate process started under Node's permission model: no file writes, no child processes, no workers, reads limited to the workspace. It is handed no host objects and none of your environment variables, and it is killed at its time limit. | Node's permission model does not restrict network access on Node 22. `TURNPACK_ALLOW_EXEC=1` turns `ctx.exec` on and the read-only promise off. |
-| **Protected paths** | `ship` never writes `.turnpack.json` or anything under `.git/`, so an edit cannot switch off the allowlist or plant a git hook. | |
-| **Verify allowlist** | Optional. With `{"enforceVerifyAllowlist": true, "allowedVerify": ["npm test"]}` in `.turnpack.json`, `ship` runs only those commands, with plain arguments and no shell operators. A broken config file blocks verify rather than disabling the list. | The command runs your project's code, and `ship` edits your project's code. It limits what can be launched, not what your tests do. |
+| **Protected paths** | `ship` never writes a `.turnpack.json` or anything inside a `.git` directory, at any depth, so an edit cannot switch off the allowlist or plant a git hook. | |
+| **Verify allowlist** | Optional. With `{"enforceVerifyAllowlist": true, "allowedVerify": ["npm test"]}` in `.turnpack.json` at the workspace root, `ship` runs only those commands, with plain arguments and no shell operators, whichever subdirectory a call names. A broken config file blocks verify rather than disabling the list. | The command runs your project's code, and `ship` edits your project's code. It limits what can be launched, not what your tests do. |
 | **Rollback** | Byte-exact snapshots taken before the first write, restored when verify fails or times out, and when the server receives SIGINT or SIGTERM mid-verify. New files and the directories created for them are removed. | Snapshots live in memory, so `kill -9` or a power cut mid-verify leaves the edits in place. Side effects of the verify command itself (a migrated database, generated files) are not undone. Keep using git. |
 | **Zero dependencies** | `"dependencies": {}`. The whole server is the TypeScript in `src/`. | |
 

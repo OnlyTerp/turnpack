@@ -19,6 +19,7 @@ What is handled for you:
 - **Paths.** The workspace check understands drive letters and case-insensitive names, so `D:\` cannot be reached from a workspace on `C:\`.
 - **Line endings.** A `ship` edit written with `\n` matches a file that uses `\r\n`, and the file keeps its `\r\n`.
 - **Runaway tests.** A verify command that exceeds its time limit is stopped with `taskkill /T /F`, which takes its child processes with it.
+- **Starting the server.** On Windows `npx` is a batch file (`npx.cmd`), and many AI apps start MCP servers without a shell, where a batch file is "program not found". `init` therefore writes `cmd /c npx -y turnpack serve` on Windows. If you add the entry by hand, use `"command": "cmd"` and `"args": ["/c", "npx", "-y", "turnpack", "serve"]`.
 - **Config locations.** `init` reads and writes the same per-user config files your AI app uses on Windows, under your user profile.
 
 One difference from macOS and Linux: Windows has no equivalent of SIGTERM, so if the server process is ended abruptly while a verify command is running, the rollback that would run on other systems does not get the chance. Ctrl+C in a console is still handled.
