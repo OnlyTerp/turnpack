@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Turnpack — Time-Saved Calculator & 60-Second Setup</title>
+  <title>Turnpack — TTFT &amp; Time-Saved Calculator + 60-Second Setup</title>
   <style>
     :root {
       --bg: #0b0f17;
@@ -14,6 +14,7 @@
       --muted: #94a3b8;
       --green: #10b981;
       --cyan: #38bdf8;
+      --amber: #f59e0b;
       --red: #f43f5e;
     }
     * { box-sizing: border-box; }
@@ -25,18 +26,18 @@
       font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       line-height: 1.5;
     }
-    .wrap { max-width: 960px; margin: 0 auto; }
+    .wrap { max-width: 980px; margin: 0 auto; }
     h1 { font-size: 2rem; margin: 0 0 8px; letter-spacing: -0.02em; }
-    .sub { color: var(--muted); margin: 0 0 28px; }
+    .sub { color: var(--muted); margin: 0 0 24px; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
-    @media (max-width: 780px) { .grid { grid-template-columns: 1fr; } }
+    @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
     .card {
       background: var(--card);
       border: 1px solid var(--border);
       border-radius: 16px;
       padding: 24px;
     }
-    label { display: flex; justify-content: space-between; font-weight: 600; margin: 14px 0 6px; font-size: 0.95rem; }
+    label { display: flex; justify-content: space-between; font-weight: 600; margin: 14px 0 6px; font-size: 0.92rem; }
     input[type="range"] { width: 100%; accent-color: var(--green); }
     select {
       width: 100%;
@@ -47,23 +48,41 @@
       border-radius: 10px;
       font-size: 0.95rem;
     }
-    .big-num { font-size: 3rem; font-weight: 800; color: var(--green); line-height: 1.1; margin: 10px 0 4px; }
-    .bar-row { margin: 16px 0; }
-    .bar-track { height: 22px; background: #1e293b; border-radius: 8px; overflow: hidden; margin-top: 6px; }
-    .bar-fill-red { height: 100%; background: var(--red); opacity: 0.8; transition: width 0.2s ease; }
+    .big-num { font-size: 3rem; font-weight: 800; color: var(--green); line-height: 1.1; margin: 8px 0 4px; }
+    .split-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 14px 0; }
+    .mini-box {
+      background: var(--card2);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+    }
+    .bar-row { margin: 14px 0; }
+    .bar-track { height: 22px; background: #1e293b; border-radius: 8px; overflow: hidden; margin-top: 6px; display: flex; }
+    .bar-fill-ttft { height: 100%; background: var(--red); transition: width 0.2s ease; }
+    .bar-fill-stream { height: 100%; background: var(--amber); transition: width 0.2s ease; }
     .bar-fill-green { height: 100%; background: var(--green); transition: width 0.2s ease; }
-    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
-    .tab {
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+    .tab, .preset {
       background: var(--card2);
       border: 1px solid var(--border);
       color: var(--muted);
-      padding: 8px 14px;
+      padding: 7px 12px;
       border-radius: 999px;
       cursor: pointer;
       font-weight: 600;
-      font-size: 0.9rem;
+      font-size: 0.85rem;
     }
-    .tab.active { border-color: var(--green); color: var(--text); background: #064e3b; }
+    .tab.active, .preset.active { border-color: var(--green); color: var(--text); background: #064e3b; }
+    .pill-info {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px 12px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.84rem;
+      color: var(--cyan);
+      margin-top: 12px;
+    }
     pre {
       background: #070b12;
       border: 1px solid var(--border);
@@ -83,48 +102,77 @@
       font-weight: 700;
       cursor: pointer;
     }
-    .note { color: var(--muted); font-size: 0.85rem; margin-top: 16px; }
+    .note { color: var(--muted); font-size: 0.84rem; margin-top: 14px; }
   </style>
 </head>
 <body>
   <div class="wrap">
-    <h1>Turnpack Time-Saved Calculator &amp; Setup</h1>
-    <p class="sub">See how collapsing multi-file search &amp; retry loops saves waiting time in plain English, then copy the 1-step setup for your AI coding app.</p>
+    <h1>Turnpack TTFT &amp; Time-Saved Calculator</h1>
+    <p class="sub">Slow Time-to-First-Token (TTFT) and token streaming repeat between <strong>every single AI tool call</strong>. Slide in your provider speed to see how much dead waiting fewer turns eliminate.</p>
 
     <div class="grid">
       <div class="card">
-        <h2 style="margin-top:0">1. Your Daily AI Workflow</h2>
-        <label><span>Tasks / prompts per day</span><span id="vPrompts">20</span></label>
+        <h2 style="margin-top:0">1. Provider &amp; Workflow Speed</h2>
+        <div class="tabs" id="presets">
+          <button class="preset" data-preset="fast">⚡ Fast Warm API</button>
+          <button class="preset active" data-preset="frontier">🧠 Frontier Reasoning</button>
+          <button class="preset" data-preset="high-ttft">🐢 High-TTFT / Busy</button>
+          <button class="preset" data-preset="local">💻 Local / 70B+ GPU</button>
+        </div>
+
+        <label><span>Time to First Token (TTFT freeze / call)</span><span id="vTtft">6s</span></label>
+        <input id="ttft" type="range" min="1" max="40" value="6" />
+
+        <label><span>Tokens per intermediate step</span><span id="vTok">360 tok</span></label>
+        <input id="tok" type="range" min="100" max="800" step="20" value="360" />
+
+        <label><span>Provider stream speed (tokens / sec)</span><span id="vTps">30 tok/s</span></label>
+        <input id="tps" type="range" min="8" max="120" value="30" />
+
+        <div class="pill-info" id="perTurnSummary">1 round-trip = 6.0s TTFT + 12.0s stream = 18.0s/turn</div>
+
+        <label><span>AI tasks / prompts per day</span><span id="vPrompts">20</span></label>
         <input id="prompts" type="range" min="5" max="60" value="20" />
 
-        <label><span>Project change size</span><span id="vSize">Medium (6–10 files)</span></label>
+        <label><span>Typical change scope</span><span id="vSize">Medium (6–10 files)</span></label>
         <select id="size">
           <option value="small">Small (3–5 files: 8 turns → 2 turns)</option>
           <option value="medium" selected>Medium (6–10 files: 16 turns → 4 turns)</option>
           <option value="large">Large refactor (15+ files: 28 turns → 7 turns)</option>
         </select>
 
-        <label><span>Average AI thinking pause per turn (seconds)</span><span id="vSec">8s</span></label>
-        <input id="sec" type="range" min="3" max="20" value="8" />
-
         <label><span>Coding days per week</span><span id="vDays">5</span></label>
         <input id="days" type="range" min="1" max="7" value="5" />
       </div>
 
       <div class="card">
-        <h2 style="margin-top:0">2. Estimated Waiting Time Saved</h2>
-        <div class="big-num" id="wkOut">~2.7 hrs/wk</div>
-        <div id="moOut" style="color:var(--text);font-weight:600;">~11.6 hours/month reclaimed (~32.0 min/day)</div>
+        <h2 style="margin-top:0">2. Estimated Dead Waiting Saved</h2>
+        <div class="big-num" id="wkOut">~6.0 hrs/wk</div>
+        <div id="moOut" style="color:var(--text);font-weight:600;">~25.8 hours/month reclaimed (~72.0 min/day)</div>
+
+        <div class="split-grid">
+          <div class="mini-box">
+            <div style="font-size:0.8rem;color:var(--red);font-weight:700;">TTFT FREEZES SKIPPED</div>
+            <div id="wkTtft" style="font-size:1.3rem;font-weight:800;">~2.0 hrs/wk</div>
+          </div>
+          <div class="mini-box">
+            <div style="font-size:0.8rem;color:var(--amber);font-weight:700;">TOKEN STREAM WAIT SKIPPED</div>
+            <div id="wkStream" style="font-size:1.3rem;font-weight:800;">~4.0 hrs/wk</div>
+          </div>
+        </div>
 
         <div class="bar-row">
-          <div style="display:flex;justify-content:space-between;font-size:0.9rem;"><span>Normal stop-and-go loop</span><span id="baseMin">42.7 min/day</span></div>
-          <div class="bar-track"><div class="bar-fill-red" style="width:100%"></div></div>
+          <div style="display:flex;justify-content:space-between;font-size:0.9rem;"><span>Normal loop (Red = TTFT, Amber = stream)</span><span id="baseMin">96.0 min/day</span></div>
+          <div class="bar-track">
+            <div id="baseTtftBar" class="bar-fill-ttft" style="width:33%"></div>
+            <div id="baseStreamBar" class="bar-fill-stream" style="width:67%"></div>
+          </div>
         </div>
         <div class="bar-row">
-          <div style="display:flex;justify-content:space-between;font-size:0.9rem;"><span>With Turnpack (pack + verified ship)</span><span id="tpMin" style="color:var(--green);font-weight:700;">10.7 min/day</span></div>
+          <div style="display:flex;justify-content:space-between;font-size:0.9rem;"><span>With Turnpack (pack + verified ship)</span><span id="tpMin" style="color:var(--green);font-weight:700;">24.0 min/day</span></div>
           <div class="bar-track"><div id="tpBar" class="bar-fill-green" style="width:25%"></div></div>
         </div>
-        <p class="note">Transparent formula: prompts_per_day × turns_saved × seconds_per_turn. Does not count extra time saved by automatic rollback when edits fail tests.</p>
+        <p class="note">Transparent formula: turns_saved × (TTFT + tokens_per_turn ÷ tok/s). Excludes extra time saved by automatic rollback when edits break tests or avoiding late-session 100k+ token TTFT spikes.</p>
       </div>
     </div>
 
@@ -149,6 +197,12 @@
       medium: { label: "Medium (6–10 files)", base: 16, tp: 4 },
       large: { label: "Large (15+ files)", base: 28, tp: 7 },
     };
+    const PROVIDER_PRESETS = {
+      fast: { ttft: 2, tok: 220, tps: 45 },
+      frontier: { ttft: 6, tok: 360, tps: 30 },
+      "high-ttft": { ttft: 15, tok: 400, tps: 20 },
+      local: { ttft: 25, tok: 450, tps: 18 },
+    };
     const SNIPPETS = {
       auto: "# 1. Preview safely in a temp folder first (changes 0 of your files)\nnpx turnpack demo\n\n# 2. Preview config diff & wire Claude Code, Codex CLI, or OMP\nnpx turnpack init",
       claude: '// In ~/.claude.json\n{\n  "mcpServers": {\n    "turnpack": {\n      "command": "npx",\n      "args": ["-y", "turnpack", "serve"]\n    }\n  }\n}',
@@ -159,45 +213,84 @@
     };
 
     const els = {
+      ttft: document.getElementById("ttft"),
+      tok: document.getElementById("tok"),
+      tps: document.getElementById("tps"),
       prompts: document.getElementById("prompts"),
       size: document.getElementById("size"),
-      sec: document.getElementById("sec"),
       days: document.getElementById("days"),
+      vTtft: document.getElementById("vTtft"),
+      vTok: document.getElementById("vTok"),
+      vTps: document.getElementById("vTps"),
       vPrompts: document.getElementById("vPrompts"),
       vSize: document.getElementById("vSize"),
-      vSec: document.getElementById("vSec"),
       vDays: document.getElementById("vDays"),
+      perTurnSummary: document.getElementById("perTurnSummary"),
       wkOut: document.getElementById("wkOut"),
       moOut: document.getElementById("moOut"),
+      wkTtft: document.getElementById("wkTtft"),
+      wkStream: document.getElementById("wkStream"),
       baseMin: document.getElementById("baseMin"),
       tpMin: document.getElementById("tpMin"),
+      baseTtftBar: document.getElementById("baseTtftBar"),
+      baseStreamBar: document.getElementById("baseStreamBar"),
       tpBar: document.getElementById("tpBar"),
       snippet: document.getElementById("snippet"),
       copyBtn: document.getElementById("copyBtn"),
     };
 
     function updateCalc() {
+      const ttftSec = Number(els.ttft.value);
+      const tokTurn = Number(els.tok.value);
+      const tps = Number(els.tps.value);
+      const streamSec = tokTurn / tps;
+      const turnSec = ttftSec + streamSec;
+
       const n = Number(els.prompts.value);
       const p = PROFILES[els.size.value];
-      const s = Number(els.sec.value);
       const d = Number(els.days.value);
+
+      els.vTtft.textContent = `${ttftSec}s`;
+      els.vTok.textContent = `${tokTurn} tok`;
+      els.vTps.textContent = `${tps} tok/s`;
       els.vPrompts.textContent = String(n);
       els.vSize.textContent = p.label;
-      els.vSec.textContent = `${s}s`;
       els.vDays.textContent = String(d);
+      els.perTurnSummary.textContent = `1 round-trip = ${ttftSec.toFixed(1)}s TTFT + ${streamSec.toFixed(1)}s stream = ${turnSec.toFixed(1)}s/turn`;
 
-      const baseDayMin = (n * p.base * s) / 60;
-      const tpDayMin = (n * p.tp * s) / 60;
+      const turnsSaved = p.base - p.tp;
+      const baseDayMin = (n * p.base * turnSec) / 60;
+      const tpDayMin = (n * p.tp * turnSec) / 60;
       const savedDayMin = baseDayMin - tpDayMin;
       const savedWkHr = (savedDayMin * d) / 60;
       const savedMoHr = savedWkHr * 4.3;
 
+      const ttftWkHr = (n * turnsSaved * ttftSec * d) / 3600;
+      const streamWkHr = (n * turnsSaved * streamSec * d) / 3600;
+
       els.wkOut.textContent = `~${savedWkHr.toFixed(1)} hrs/wk`;
       els.moOut.textContent = `~${savedMoHr.toFixed(1)} hours/month reclaimed (~${savedDayMin.toFixed(1)} min/day)`;
+      els.wkTtft.textContent = `~${ttftWkHr.toFixed(1)} hrs/wk`;
+      els.wkStream.textContent = `~${streamWkHr.toFixed(1)} hrs/wk`;
       els.baseMin.textContent = `${baseDayMin.toFixed(1)} min/day`;
       els.tpMin.textContent = `${tpDayMin.toFixed(1)} min/day`;
+
+      const ttftShare = Math.round((ttftSec / turnSec) * 100);
+      els.baseTtftBar.style.width = `${ttftShare}%`;
+      els.baseStreamBar.style.width = `${100 - ttftShare}%`;
       els.tpBar.style.width = `${Math.max(8, Math.round((p.tp / p.base) * 100))}%`;
     }
+
+    document.getElementById("presets").addEventListener("click", (e) => {
+      const key = e.target.dataset?.preset;
+      if (!key || !PROVIDER_PRESETS[key]) return;
+      const pr = PROVIDER_PRESETS[key];
+      els.ttft.value = String(pr.ttft);
+      els.tok.value = String(pr.tok);
+      els.tps.value = String(pr.tps);
+      document.querySelectorAll(".preset").forEach((b) => b.classList.toggle("active", b.dataset.preset === key));
+      updateCalc();
+    });
 
     let currentApp = "auto";
     function selectApp(app) {
@@ -206,7 +299,7 @@
       document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.app === app));
     }
 
-    ["prompts", "size", "sec", "days"].forEach((id) => els[id].addEventListener("input", updateCalc));
+    ["ttft", "tok", "tps", "prompts", "size", "days"].forEach((id) => els[id].addEventListener("input", updateCalc));
     document.getElementById("tabs").addEventListener("click", (e) => {
       if (e.target.dataset?.app) selectApp(e.target.dataset.app);
     });

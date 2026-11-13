@@ -200,54 +200,135 @@ def write_how_it_works_svg(theme: str) -> None:
     (ASSETS_DIR / f"how-it-works-{theme}.svg").write_text(svg, encoding="utf-8")
 
 
+def write_ttft_tax_svg(theme: str) -> None:
+    p = PALETTES[theme]
+    # 16 mini repeating [TTFT | Stream] blocks for Normal loop vs 4 blocks for Turnpack
+    loop16_svg = []
+    bx = 58
+    for i in range(16):
+        loop16_svg.append(
+            f'<rect x="{bx}" y="318" width="24" height="32" rx="4" fill="{p["red"]}" opacity="0.88"/>'
+            f'<rect x="{bx + 26}" y="318" width="30" height="32" rx="4" fill="{p["amber"]}" opacity="0.82"/>'
+        )
+        bx += 60
+
+    loop4_svg = []
+    tx = 58
+    for i in range(4):
+        loop4_svg.append(
+            f'<rect x="{tx}" y="396" width="24" height="32" rx="4" fill="{p["red"]}" opacity="0.88"/>'
+            f'<rect x="{tx + 26}" y="396" width="30" height="32" rx="4" fill="{p["amber"]}" opacity="0.82"/>'
+        )
+        tx += 60
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 490" width="1200" height="490" role="img" aria-label="TTFT and slow token streaming tax across 16 tool calls vs 4 Turnpack calls">
+  <rect width="1200" height="490" rx="20" fill="{p['bg']}" stroke="{p['border']}" stroke-width="1.5"/>
+
+  <text x="58" y="48" fill="{p['title']}" font-family="{FONT_SANS}" font-size="23.5" font-weight="800">Why AI Tool Loops Feel So Slow: You Pay TTFT + Slow Tokens on Every Step</text>
+  <text x="58" y="74" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">Even when reading a file takes 0.02s locally, every separate tool call forces a brand-new provider round-trip:</text>
+
+  <!-- Section A: Anatomy of ONE Tool Call -->
+  <rect x="44" y="94" width="1112" height="148" rx="14" fill="{p['card']}" stroke="{p['border']}" stroke-width="1.2"/>
+  <text x="64" y="120" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">ANATOMY OF ONE INTERMEDIATE AI TOOL CALL</text>
+
+  <rect x="64" y="132" width="446" height="42" rx="8" fill="{p['red']}" opacity="0.85"/>
+  <text x="287" y="158" text-anchor="middle" fill="#FFFFFF" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">1. Time to First Token (TTFT): 5s–25s+ dead freeze</text>
+
+  <rect x="514" y="132" width="538" height="42" rx="8" fill="{p['amber']}" opacity="0.86"/>
+  <text x="783" y="158" text-anchor="middle" fill="#0B0F17" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">2. Thinking &amp; Slow Token Stream (15–40 tok/s): 5s–25s+</text>
+
+  <rect x="1056" y="132" width="80" height="42" rx="8" fill="{p['green']}"/>
+  <text x="1096" y="158" text-anchor="middle" fill="#FFFFFF" font-family="{FONT_MONO}" font-size="12" font-weight="700">0.02s tool</text>
+
+  <circle cx="72" cy="196" r="5" fill="{p['red']}"/>
+  <text x="84" y="201" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13">TTFT (Startup Freeze): Queueing + re-reading growing chat history before a single word appears.</text>
+  <circle cx="72" cy="218" r="5" fill="{p['amber']}"/>
+  <text x="84" y="223" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13">Token Wait: Thinking &amp; tool JSON streamed token-by-token.   Local execution (~20ms) is practically instant.</text>
+
+  <!-- Section B: 16 Calls vs 4 Calls -->
+  <text x="58" y="284" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">Normal Chatty Loop — 16 separate tool calls</text>
+  <text x="1142" y="284" text-anchor="end" fill="{p['red']}" font-family="{FONT_MONO}" font-size="13" font-weight="700">16 × (TTFT + token wait) = 5 to 13+ minutes waiting</text>
+  <rect x="52" y="308" width="1096" height="52" rx="10" fill="{p['card']}" stroke="{p['border']}" stroke-width="1"/>
+  {"".join(loop16_svg)}
+  <text x="1030" y="339" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">16× PAID</text>
+
+  <text x="58" y="378" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">With Turnpack — 4 bundled calls (pack + ship)</text>
+  <rect x="52" y="390" width="1096" height="44" rx="10" fill="{p['card']}" stroke="{p['green']}" stroke-width="1.3"/>
+  {"".join(loop4_svg)}
+  <rect x="308" y="396" width="832" height="32" rx="6" fill="{p['greenBg']}"/>
+  <text x="724" y="417" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">12 repeated TTFT freezes + 12 intermediate token streams eliminated (~75% less dead waiting)</text>
+
+  <text x="58" y="466" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Red = TTFT dead wait per call   ·   Amber = Slow token stream per call   ·   Green = Time your AI skips completely with Turnpack</text>
+</svg>
+"""
+    (ASSETS_DIR / f"ttft-tax-{theme}.svg").write_text(svg, encoding="utf-8")
+
+
 def write_time_saved_svg(theme: str) -> None:
     p = PALETTES[theme]
     rows = [
-        ("Small 4-file tweak", 8, 2, "~64s wait", "~16s wait", "Save ~48s per task"),
-        ("Typical 8-file feature", 16, 4, "~2m 08s", "~32s wait", "Save ~1m 36s per task"),
-        ("Large refactor (15+ files)", 28, 7, "~3m 44s", "~56s wait", "Save ~2m 48s per task"),
+        ("Fast / Warm-Cache API", "2s TTFT + 5s stream = 7s/turn", 112, 28, "1m 52s", "28s", "Save ~1m 24s / task"),
+        ("Frontier Reasoning", "6s TTFT + 12s stream = 18s/turn", 288, 72, "4m 48s", "1m 12s", "Save ~3m 36s / task"),
+        ("High-TTFT / Busy API", "15s TTFT + 20s stream = 35s/turn", 560, 140, "9m 20s", "2m 20s", "Save ~7m 00s / task"),
+        ("Slow-Prefill / Local GPU", "25s TTFT + 25s @ 18 tok/s = 50s/turn", 800, 200, "13m 20s", "3m 20s", "Save ~10m 00s / task"),
     ]
 
     bars_svg = []
-    y = 104
-    max_bar = 400
-    for title, base_t, tp_t, base_lbl, tp_lbl, save_lbl in rows:
-        base_w = int((base_t / 28) * max_bar)
-        tp_w = max(36, int((tp_t / 28) * max_bar))
+    y = 114
+    max_bar = 370
+    max_sec = 800
+    for title, sub, base_sec, tp_sec, base_lbl, tp_lbl, save_lbl in rows:
+        base_w = max(24, int((base_sec / max_sec) * max_bar))
+        tp_w = max(14, int((tp_sec / max_sec) * max_bar))
         bars_svg.append(
-            f'<text x="58" y="{y}" fill="{p["title"]}" font-family="{FONT_SANS}" font-size="16" font-weight="700">{title}</text>'
-            f'<text x="706" y="{y}" text-anchor="end" fill="{p["green"]}" font-family="{FONT_MONO}" font-size="13.5" font-weight="700">{save_lbl}</text>'
-            f'<rect x="58" y="{y + 12}" width="{max_bar}" height="24" rx="6" fill="{p["track"]}"/>'
-            f'<rect x="58" y="{y + 12}" width="{base_w}" height="24" rx="6" fill="{p["red"]}" opacity="0.72"/>'
-            f'<text x="{58 + max_bar + 14}" y="{y + 29}" fill="{p["body"]}" font-family="{FONT_MONO}" font-size="12.5">Normal: {base_t} turns ({base_lbl})</text>'
-            f'<rect x="58" y="{y + 42}" width="{max_bar}" height="24" rx="6" fill="{p["track"]}"/>'
-            f'<rect x="58" y="{y + 42}" width="{tp_w}" height="24" rx="6" fill="{p["green"]}"/>'
-            f'<text x="{58 + max_bar + 14}" y="{y + 59}" fill="{p["greenText"]}" font-family="{FONT_MONO}" font-size="12.5" font-weight="700">Turnpack: {tp_t} turns ({tp_lbl})</text>'
+            f'<text x="58" y="{y}" fill="{p["title"]}" font-family="{FONT_SANS}" font-size="15" font-weight="700">{title} '
+            f'<tspan fill="{p["muted"]}" font-family="{FONT_MONO}" font-size="11.5" font-weight="500">({sub})</tspan></text>'
+            f'<text x="708" y="{y}" text-anchor="end" fill="{p["green"]}" font-family="{FONT_MONO}" font-size="12.5" font-weight="700">{save_lbl}</text>'
+            f'<rect x="58" y="{y + 10}" width="{max_bar}" height="20" rx="5" fill="{p["track"]}"/>'
+            f'<rect x="58" y="{y + 10}" width="{base_w}" height="20" rx="5" fill="{p["red"]}" opacity="0.76"/>'
+            f'<text x="{58 + max_bar + 14}" y="{y + 25}" fill="{p["body"]}" font-family="{FONT_MONO}" font-size="12">Normal 16t: ~{base_lbl}</text>'
+            f'<rect x="58" y="{y + 35}" width="{max_bar}" height="20" rx="5" fill="{p["track"]}"/>'
+            f'<rect x="58" y="{y + 35}" width="{tp_w}" height="20" rx="5" fill="{p["green"]}"/>'
+            f'<text x="{58 + max_bar + 14}" y="{y + 50}" fill="{p["greenText"]}" font-family="{FONT_MONO}" font-size="12" font-weight="700">Turnpack 4t: ~{tp_lbl}</text>'
         )
-        y += 108
+        y += 100
 
-    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 475" width="1200" height="475" role="img" aria-label="Time saved visualization chart">
-  <rect width="1200" height="475" rx="20" fill="{p['bg']}" stroke="{p['border']}" stroke-width="1.5"/>
+    weekly_rows = [
+        ("Fast Warm API (7s/turn)", "~2.3 hrs / wk", p["body"]),
+        ("Frontier Reasoning (18s/turn)", "~6.0 hrs / wk", p["title"]),
+        ("High-TTFT / Busy (35s/turn)", "~11.7 hrs / wk", p["greenText"]),
+        ("Local / Slow GPU (50s/turn)", "~16.7 hrs / wk", p["green"]),
+    ]
+    wk_svg = []
+    wy = 196
+    for lbl, hrs, clr in weekly_rows:
+        wk_svg.append(
+            f'<rect x="762" y="{wy}" width="366" height="44" rx="9" fill="{p["card2"]}" stroke="{p["border"]}" stroke-width="1"/>'
+            f'<text x="778" y="{wy + 27}" fill="{p["body"]}" font-family="{FONT_SANS}" font-size="13.5" font-weight="600">{lbl}</text>'
+            f'<text x="1112" y="{wy + 27}" text-anchor="end" fill="{clr}" font-family="{FONT_MONO}" font-size="14" font-weight="700">{hrs}</text>'
+        )
+        wy += 54
 
-  <text x="58" y="54" fill="{p['title']}" font-family="{FONT_SANS}" font-size="25" font-weight="800">How much waiting time does fewer AI turns save?</text>
-  <text x="58" y="80" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">Illustrative model-wait math using an 8s average AI pause per round-trip (try your own numbers with npx turnpack estimate)</text>
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 555" width="1200" height="555" role="img" aria-label="Time saved by provider TTFT and token speed">
+  <rect width="1200" height="555" rx="20" fill="{p['bg']}" stroke="{p['border']}" stroke-width="1.5"/>
+
+  <text x="58" y="48" fill="{p['title']}" font-family="{FONT_SANS}" font-size="24" font-weight="800">Real-World Waiting Time Saved by Provider Speed (16-Turn Task → 4 Turns)</text>
+  <text x="58" y="74" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">The slower your model's Time-to-First-Token (TTFT) or token speed (tok/s), the bigger difference fewer turns makes:</text>
 
   {"".join(bars_svg)}
 
   <!-- Weekly Impact Highlight Box -->
-  <rect x="738" y="104" width="414" height="304" rx="16" fill="{p['card']}" stroke="{p['green']}" stroke-width="1.4"/>
-  <rect x="766" y="130" width="184" height="26" rx="13" fill="{p['greenBg']}"/>
-  <text x="858" y="147" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">ACTIVE BUILDER IMPACT</text>
-  <text x="766" y="182" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">20 typical tasks/day · 5 days/week:</text>
-  <text x="766" y="242" fill="{p['green']}" font-family="{FONT_SANS}" font-size="52" font-weight="800" letter-spacing="-1">~2.7 hrs</text>
-  <text x="766" y="270" fill="{p['title']}" font-family="{FONT_SANS}" font-size="18" font-weight="700">reclaimed every single week</text>
-  <text x="766" y="296" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">(~11.6 hours/month not staring at spinners)</text>
+  <rect x="738" y="104" width="414" height="390" rx="16" fill="{p['card']}" stroke="{p['green']}" stroke-width="1.4"/>
+  <rect x="762" y="126" width="366" height="28" rx="14" fill="{p['greenBg']}"/>
+  <text x="945" y="145" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">WEEKLY HOURS RECLAIMED (20 tasks/day · 5d/wk)</text>
+  <text x="762" y="178" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13.5">12 eliminated round-trips × 100 tasks/week:</text>
 
-  <line x1="766" y1="322" x2="1124" y2="322" stroke="{p['border']}" stroke-width="1"/>
-  <text x="766" y="352" fill="{p['title']}" font-family="{FONT_SANS}" font-size="14" font-weight="700">+ Built-in mistake protection:</text>
-  <text x="766" y="376" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13.5">Broken multi-file edits auto-rewind in milliseconds.</text>
+  {"".join(wk_svg)}
 
-  <text x="58" y="448" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Transparent formula: prompts_per_day × turns_saved × seconds_per_turn. Run "npx turnpack estimate" or open docs/calculator.html.</text>
+  <text x="762" y="434" fill="{p['title']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">+ Context grows slower too:</text>
+  <text x="762" y="456" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">Avoids 100k+ token TTFT spikes &amp; broken half-edits.</text>
+
+  <text x="58" y="530" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Transparent math: turns_saved × (TTFT + tokens_per_turn ÷ tok/s). Plug in your own provider with npx turnpack estimate.</text>
 </svg>
 """
     (ASSETS_DIR / f"time-saved-{theme}.svg").write_text(svg, encoding="utf-8")
@@ -354,5 +435,6 @@ if __name__ == "__main__":
     for th in ("dark", "light"):
         write_hero_svg(th)
         write_how_it_works_svg(th)
+        write_ttft_tax_svg(th)
         write_time_saved_svg(th)
     render_demo_gif()

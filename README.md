@@ -22,12 +22,18 @@
 
 ## Why Your AI Feels Slow (In Plain English)
 
-Even the smartest coding AI normally spends most of its clock **waiting on back-and-forth turns**, not thinking:
+Even the smartest coding AI spends most of its wall-clock time **waiting on Time-to-First-Token (`TTFT`) freezes and slow token streaming between tool calls**, not thinking once:
 
-1. Ask to change a feature → the AI pauses to search where a function lives.
-2. Wait → it opens file #1.
-3. Wait → it opens file #2, file #3, and your tests one by one.
-4. Wait → it edits two files, runs your tests, fails, and leaves half-edited files broken on disk.
+Every single time an AI searches one folder or opens one file by itself, you wait through **a full provider round-trip**:
+- **Startup freeze (`TTFT`):** queuing + re-reading your growing chat history before a single token appears (`2s–25s+` depending on provider load, reasoning depth, and context length).
+- **Token-by-token wait (`tok/s`):** streaming reasoning + tool JSON (`15–45 tok/s`), repeated over and over across 10–25 steps.
+- **Half-edited breakage:** when an AI edits two files sequentially and tests fail, your repo stays broken while it burns even more slow turns undoing mistakes.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/ttft-tax-dark.svg" />
+  <source media="(prefers-color-scheme: light)" srcset="assets/ttft-tax-light.svg" />
+  <img alt="Why every intermediate tool call repeats TTFT freezes and slow token streaming" src="assets/ttft-tax-dark.svg" width="100%" />
+</picture>
 
 **Turnpack fixes the loop locally on your computer with 3 focused tools:**
 - **`pack`** grabs searches, multiple file slices, globs, and git status together in one bounded step — while automatically hiding `.env` files and private keys.
@@ -115,19 +121,27 @@ See [docs/harness-matrix.md](docs/harness-matrix.md) for exact file paths, frami
 
 ## How Much Time Does It Save?
 
-Every eliminated search/read/retry round-trip cuts another **model thinking pause** out of your task — plus saves manual cleanup time when `ship` catches a failing test early.
+The slower your provider's **Time-to-First-Token (`TTFT`)** or **token output speed (`tok/s`)**, the bigger difference fewer round-trips makes. Every skipped turn avoids another `TTFT` startup freeze plus another token-streaming wait:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/time-saved-dark.svg" />
   <source media="(prefers-color-scheme: light)" srcset="assets/time-saved-light.svg" />
-  <img alt="Visual chart showing AI waiting time saved across small, medium, and large tasks" src="assets/time-saved-dark.svg" width="100%" />
+  <img alt="Visual chart showing real-world waiting time saved across fast, frontier, high-TTFT, and local providers" src="assets/time-saved-dark.svg" width="100%" />
 </picture>
 
-- **Test with your own numbers in your terminal:**
+| Provider Latency Profile *(16 turns → 4 turns)* | 1 Turn (`TTFT + token stream`) | Single-Task Wait (`Before → After`) | Weekly Saved (`20 tasks/d, 5d/wk`) |
+| :--- | :--- | :--- | ---: |
+| **Fast / Warm-Cache API** | `2s TTFT + 5s @ 45 tok/s = 7s` | `~1m 52s` → `~28s` (**save `~1m 24s`**) | **`~2.3 hrs / week`** |
+| **Frontier Reasoning Model** | `6s TTFT + 12s @ 30 tok/s = 18s` | `~4m 48s` → `~1m 12s` (**save `~3m 36s`**) | **`~6.0 hrs / week`** |
+| **High-TTFT / Deep Thinking / Busy API** | `15s TTFT + 20s @ 20 tok/s = 35s` | `~9m 20s` → `~2m 20s` (**save `~7m 00s`**) | **`~11.7 hrs / week`** |
+| **Slow-Prefill / Local 70B+ GPU** | `25s TTFT + 25s @ 18 tok/s = 50s` | `~13m 20s` → `~3m 20s` (**save `~10m 00s`**) | **`~16.7 hrs / week`** |
+
+- **Plug in your own TTFT & `tok/s` in your terminal:**
   ```bash
-  npx turnpack estimate --prompts 20 --size medium --turn-sec 8
+  npx turnpack estimate --profile high-ttft
+  npx turnpack estimate --ttft 15 --tok-per-turn 400 --tps 20
   ```
-- **Open the interactive visual slider page:** [docs/calculator.html](docs/calculator.html) *(and math breakdown in [docs/time-calculator.md](docs/time-calculator.md))*
+- **Open the interactive visual slider page:** [docs/calculator.html](docs/calculator.html) *(and exact formula in [docs/time-calculator.md](docs/time-calculator.md))*
 
 ### Measured Local Engine Overhead (42-File Fixture, Node v24.16.0)
 

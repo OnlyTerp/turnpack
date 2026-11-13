@@ -181,5 +181,28 @@ describe("MCP server framing, schema budget & CLI lifecycle", () => {
     );
     assert.equal(estJson.turnsSavedPerTask, 12);
     assert.equal(estJson.hoursSavedPerWeek, 2.7);
+
+    const highTtft = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [CLI_PATH, "estimate", "--profile", "high-ttft", "--json"],
+        { encoding: "utf8" },
+      ),
+    );
+    assert.equal(highTtft.input.turnSeconds, 35);
+    assert.equal(highTtft.input.ttftSeconds, 15);
+    assert.equal(highTtft.input.streamSeconds, 20);
+    assert.equal(highTtft.hoursSavedPerWeek, 11.7);
+
+    const customTtft = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [CLI_PATH, "estimate", "--ttft", "12", "--tok-per-turn", "300", "--tps", "15", "--json"],
+        { encoding: "utf8" },
+      ),
+    );
+    assert.equal(customTtft.input.turnSeconds, 32);
+    assert.equal(customTtft.input.ttftSeconds, 12);
+    assert.equal(customTtft.input.streamSeconds, 20);
   });
 });

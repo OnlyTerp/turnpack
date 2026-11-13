@@ -23,7 +23,8 @@ Quickstart (no API keys required):
 Examples:
   npx turnpack init --yes
   npx turnpack init --client cursor --experimental --yes
-  npx turnpack estimate --prompts 25 --size medium --turn-sec 8
+  npx turnpack estimate --profile high-ttft
+  npx turnpack estimate --ttft 15 --tps 20
 `);
 }
 
