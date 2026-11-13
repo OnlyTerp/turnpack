@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 370" width="1200" height="370" role="img" aria-label="Turnpack hero banner">
+  <defs>
+    <linearGradient id="accentGrad-light" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <radialGradient id="glow-light" cx="82%" cy="22%" r="45%">
+      <stop offset="0%" stop-color="#059669" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#F8FAFC" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="370" rx="22" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
+  <rect width="1200" height="370" rx="22" fill="url(#glow-light)"/>
+
+  <!-- Geometric Turnpack Stack Mark -->
+  <g transform="translate(74, 54)">
+    <rect x="0" y="0" width="54" height="54" rx="14" fill="url(#accentGrad-light)"/>
+    <rect x="13" y="13" width="28" height="7" rx="3.5" fill="#FFFFFF" opacity="0.95"/>
+    <rect x="13" y="24" width="22" height="7" rx="3.5" fill="#FFFFFF" opacity="0.80"/>
+    <rect x="13" y="35" width="28" height="7" rx="3.5" fill="#FFFFFF" opacity="0.95"/>
+  </g>
+
+  <text x="144" y="80" fill="#0F172A" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="24" font-weight="800" letter-spacing="-0.4">turnpack</text>
+  <text x="144" y="102" fill="#059669" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">v0.1.0  ·  LOCAL MCP FOR CLAUDE CODE · CODEX · OMP · CURSOR</text>
+
+  <text x="74" y="172" fill="#0F172A" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="800" letter-spacing="-0.8">Stop watching your AI read one file at a time.</text>
+  <text x="74" y="212" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18.5" font-weight="400">Turnpack bundles search &amp; file reading into one clean step — and applies multi-file</text>
+  <text x="74" y="240" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18.5" font-weight="400">edits only if your tests pass. If a test fails, every file rewinds automatically.</text>
+
+  <rect x="74" y="274" width="108" height="34" rx="17" fill="#ECFDF5" stroke="#059669" stroke-width="1"/><text x="128.0" y="296" text-anchor="middle" fill="#047857" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="600">0 API Keys</text><rect x="192" y="274" width="140" height="34" rx="17" fill="#E0F2FE" stroke="#0284C7" stroke-width="1"/><text x="262.0" y="296" text-anchor="middle" fill="#0284C7" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="600">0 Dependencies</text><rect x="342" y="274" width="108" height="34" rx="17" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/><text x="396.0" y="296" text-anchor="middle" fill="#0F172A" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="600">100% Local</text><rect x="460" y="274" width="198" height="34" rx="17" fill="#ECFDF5" stroke="#059669" stroke-width="1"/><text x="559.0" y="296" text-anchor="middle" fill="#047857" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="600">Auto Rollback on Fail</text><rect x="668" y="274" width="116" height="34" rx="17" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/><text x="726.0" y="296" text-anchor="middle" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="600">MIT License</text>
+
+  <!-- Right-side compact summary box -->
+  <g transform="translate(888, 52)">
+    <rect x="0" y="0" width="246" height="256" rx="16" fill="#FFFFFF" stroke="#CBD5E1" stroke-width="1.2"/>
+    <text x="22" y="34" fill="#64748B" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700">3 FOCUSED TOOLS</text>
+    <rect x="22" y="52" width="202" height="52" rx="10" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="36" y="74" fill="#0284C7" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">pack</text>
+    <text x="36" y="93" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12.5">Search + slice + .env shield</text>
+
+    <rect x="22" y="114" width="202" height="52" rx="10" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="36" y="136" fill="#059669" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">ship</text>
+    <text x="36" y="155" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12.5">Edit + test + auto rollback</text>
+
+    <rect x="22" y="176" width="202" height="52" rx="10" fill="#F1F5F9" stroke="#CBD5E1" stroke-width="1"/>
+    <text x="36" y="198" fill="#D97706" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="14" font-weight="700">batch</text>
+    <text x="36" y="217" fill="#475569" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="12.5">Read-only JS repo filter</text>
+  </g>
+</svg>

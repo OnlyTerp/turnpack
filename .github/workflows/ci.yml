@@ -1,0 +1,46 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node-version: [22, 24]
+        exclude:
+          - os: windows-latest
+            node-version: 24
+          - os: macos-latest
+            node-version: 24
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install devDependencies
+        run: npm ci
+
+      - name: Build and run test suite
+        run: npm test
+
+      - name: Run sandbox demo & doctor checks
+        run: |
+          node dist/cli.js demo
+          node dist/cli.js doctor
+
+      - name: Run leak & clean-tarball gate
+        run: npm run check:leak

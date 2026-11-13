@@ -1,0 +1,59 @@
+{
+  "name": "turnpack",
+  "version": "0.1.0",
+  "description": "Fewer back-and-forth AI turns. Local MCP context pack + test-gated multi-file ship with automatic rollback.",
+  "license": "MIT",
+  "author": "OnlyTerp (https://github.com/OnlyTerp)",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/OnlyTerp/turnpack.git"
+  },
+  "homepage": "https://github.com/OnlyTerp/turnpack#readme",
+  "bugs": {
+    "url": "https://github.com/OnlyTerp/turnpack/issues"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-server",
+    "ai-agents",
+    "claude-code",
+    "codex",
+    "cursor",
+    "context-packing",
+    "developer-tools",
+    "typescript"
+  ],
+  "type": "module",
+  "bin": {
+    "turnpack": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "extensions",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "typescript": "^5.8.3"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test test/*.test.mjs",
+    "demo": "node dist/cli.js demo",
+    "doctor": "node dist/cli.js doctor",
+    "check:leak": "node scripts/check-leak.mjs",
+    "verify": "npm test && npm run check:leak"
+  }
+}

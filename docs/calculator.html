@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Turnpack — Time-Saved Calculator & 60-Second Setup</title>
+  <style>
+    :root {
+      --bg: #0b0f17;
+      --card: #111827;
+      --card2: #162032;
+      --border: #243044;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --green: #10b981;
+      --cyan: #38bdf8;
+      --red: #f43f5e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px 20px;
+      background: radial-gradient(circle at top right, rgba(16, 185, 129, 0.12), transparent 45%), var(--bg);
+      color: var(--text);
+      font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 960px; margin: 0 auto; }
+    h1 { font-size: 2rem; margin: 0 0 8px; letter-spacing: -0.02em; }
+    .sub { color: var(--muted); margin: 0 0 28px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    @media (max-width: 780px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 24px;
+    }
+    label { display: flex; justify-content: space-between; font-weight: 600; margin: 14px 0 6px; font-size: 0.95rem; }
+    input[type="range"] { width: 100%; accent-color: var(--green); }
+    select {
+      width: 100%;
+      padding: 10px 12px;
+      background: var(--card2);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      font-size: 0.95rem;
+    }
+    .big-num { font-size: 3rem; font-weight: 800; color: var(--green); line-height: 1.1; margin: 10px 0 4px; }
+    .bar-row { margin: 16px 0; }
+    .bar-track { height: 22px; background: #1e293b; border-radius: 8px; overflow: hidden; margin-top: 6px; }
+    .bar-fill-red { height: 100%; background: var(--red); opacity: 0.8; transition: width 0.2s ease; }
+    .bar-fill-green { height: 100%; background: var(--green); transition: width 0.2s ease; }
+    .tabs { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0; }
+    .tab {
+      background: var(--card2);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 8px 14px;
+      border-radius: 999px;
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    .tab.active { border-color: var(--green); color: var(--text); background: #064e3b; }
+    pre {
+      background: #070b12;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+      overflow-x: auto;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      font-size: 0.88rem;
+      color: #e2e8f0;
+    }
+    .btn {
+      background: var(--green);
+      color: #052e16;
+      border: none;
+      padding: 9px 16px;
+      border-radius: 10px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .note { color: var(--muted); font-size: 0.85rem; margin-top: 16px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Turnpack Time-Saved Calculator &amp; Setup</h1>
+    <p class="sub">See how collapsing multi-file search &amp; retry loops saves waiting time in plain English, then copy the 1-step setup for your AI coding app.</p>
+
+    <div class="grid">
+      <div class="card">
+        <h2 style="margin-top:0">1. Your Daily AI Workflow</h2>
+        <label><span>Tasks / prompts per day</span><span id="vPrompts">20</span></label>
+        <input id="prompts" type="range" min="5" max="60" value="20" />
+
+        <label><span>Project change size</span><span id="vSize">Medium (6–10 files)</span></label>
+        <select id="size">
+          <option value="small">Small (3–5 files: 8 turns → 2 turns)</option>
+          <option value="medium" selected>Medium (6–10 files: 16 turns → 4 turns)</option>
+          <option value="large">Large refactor (15+ files: 28 turns → 7 turns)</option>
+        </select>
+
+        <label><span>Average AI thinking pause per turn (seconds)</span><span id="vSec">8s</span></label>
+        <input id="sec" type="range" min="3" max="20" value="8" />
+
+        <label><span>Coding days per week</span><span id="vDays">5</span></label>
+        <input id="days" type="range" min="1" max="7" value="5" />
+      </div>
+
+      <div class="card">
+        <h2 style="margin-top:0">2. Estimated Waiting Time Saved</h2>
+        <div class="big-num" id="wkOut">~2.7 hrs/wk</div>
+        <div id="moOut" style="color:var(--text);font-weight:600;">~11.6 hours/month reclaimed (~32.0 min/day)</div>
+
+        <div class="bar-row">
+          <div style="display:flex;justify-content:space-between;font-size:0.9rem;"><span>Normal stop-and-go loop</span><span id="baseMin">42.7 min/day</span></div>
+          <div class="bar-track"><div class="bar-fill-red" style="width:100%"></div></div>
+        </div>
+        <div class="bar-row">
+          <div style="display:flex;justify-content:space-between;font-size:0.9rem;"><span>With Turnpack (pack + verified ship)</span><span id="tpMin" style="color:var(--green);font-weight:700;">10.7 min/day</span></div>
+          <div class="bar-track"><div id="tpBar" class="bar-fill-green" style="width:25%"></div></div>
+        </div>
+        <p class="note">Transparent formula: prompts_per_day × turns_saved × seconds_per_turn. Does not count extra time saved by automatic rollback when edits fail tests.</p>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:20px">
+      <h2 style="margin-top:0">3. 60-Second Setup for Your AI App</h2>
+      <div class="tabs" id="tabs">
+        <button class="tab active" data-app="auto">Auto-Install (Recommended)</button>
+        <button class="tab" data-app="claude">Claude Code</button>
+        <button class="tab" data-app="codex">Codex CLI</button>
+        <button class="tab" data-app="omp">OMP (oh-my-pi)</button>
+        <button class="tab" data-app="cursor">Cursor</button>
+        <button class="tab" data-app="gemini">Gemini CLI</button>
+      </div>
+      <pre id="snippet"></pre>
+      <button class="btn" id="copyBtn">Copy Command / Config</button>
+    </div>
+  </div>
+
+  <script>
+    const PROFILES = {
+      small: { label: "Small (3–5 files)", base: 8, tp: 2 },
+      medium: { label: "Medium (6–10 files)", base: 16, tp: 4 },
+      large: { label: "Large (15+ files)", base: 28, tp: 7 },
+    };
+    const SNIPPETS = {
+      auto: "# 1. Preview safely in a temp folder first (changes 0 of your files)\nnpx turnpack demo\n\n# 2. Preview config diff & wire Claude Code, Codex CLI, or OMP\nnpx turnpack init",
+      claude: '// In ~/.claude.json\n{\n  "mcpServers": {\n    "turnpack": {\n      "command": "npx",\n      "args": ["-y", "turnpack", "serve"]\n    }\n  }\n}',
+      codex: '# In ~/.codex/config.toml\n[mcp_servers.turnpack]\ncommand = "npx"\nargs = ["-y", "turnpack", "serve"]',
+      omp: '# Automatically wires mcp.json + cache-safe ExtensionAPI plugin:\nnpx turnpack init --client omp --yes',
+      cursor: '// In ~/.cursor/mcp.json (or npx turnpack init --client cursor --experimental --yes)\n{\n  "mcpServers": {\n    "turnpack": {\n      "command": "npx",\n      "args": ["-y", "turnpack", "serve"]\n    }\n  }\n}',
+      gemini: '// In ~/.gemini/settings.json (or npx turnpack init --client gemini --experimental --yes)\n{\n  "mcpServers": {\n    "turnpack": {\n      "command": "npx",\n      "args": ["-y", "turnpack", "serve"]\n    }\n  }\n}',
+    };
+
+    const els = {
+      prompts: document.getElementById("prompts"),
+      size: document.getElementById("size"),
+      sec: document.getElementById("sec"),
+      days: document.getElementById("days"),
+      vPrompts: document.getElementById("vPrompts"),
+      vSize: document.getElementById("vSize"),
+      vSec: document.getElementById("vSec"),
+      vDays: document.getElementById("vDays"),
+      wkOut: document.getElementById("wkOut"),
+      moOut: document.getElementById("moOut"),
+      baseMin: document.getElementById("baseMin"),
+      tpMin: document.getElementById("tpMin"),
+      tpBar: document.getElementById("tpBar"),
+      snippet: document.getElementById("snippet"),
+      copyBtn: document.getElementById("copyBtn"),
+    };
+
+    function updateCalc() {
+      const n = Number(els.prompts.value);
+      const p = PROFILES[els.size.value];
+      const s = Number(els.sec.value);
+      const d = Number(els.days.value);
+      els.vPrompts.textContent = String(n);
+      els.vSize.textContent = p.label;
+      els.vSec.textContent = `${s}s`;
+      els.vDays.textContent = String(d);
+
+      const baseDayMin = (n * p.base * s) / 60;
+      const tpDayMin = (n * p.tp * s) / 60;
+      const savedDayMin = baseDayMin - tpDayMin;
+      const savedWkHr = (savedDayMin * d) / 60;
+      const savedMoHr = savedWkHr * 4.3;
+
+      els.wkOut.textContent = `~${savedWkHr.toFixed(1)} hrs/wk`;
+      els.moOut.textContent = `~${savedMoHr.toFixed(1)} hours/month reclaimed (~${savedDayMin.toFixed(1)} min/day)`;
+      els.baseMin.textContent = `${baseDayMin.toFixed(1)} min/day`;
+      els.tpMin.textContent = `${tpDayMin.toFixed(1)} min/day`;
+      els.tpBar.style.width = `${Math.max(8, Math.round((p.tp / p.base) * 100))}%`;
+    }
+
+    let currentApp = "auto";
+    function selectApp(app) {
+      currentApp = app;
+      els.snippet.textContent = SNIPPETS[app];
+      document.querySelectorAll(".tab").forEach((b) => b.classList.toggle("active", b.dataset.app === app));
+    }
+
+    ["prompts", "size", "sec", "days"].forEach((id) => els[id].addEventListener("input", updateCalc));
+    document.getElementById("tabs").addEventListener("click", (e) => {
+      if (e.target.dataset?.app) selectApp(e.target.dataset.app);
+    });
+    els.copyBtn.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(SNIPPETS[currentApp]);
+      els.copyBtn.textContent = "Copied!";
+      setTimeout(() => { els.copyBtn.textContent = "Copy Command / Config"; }, 1400);
+    });
+
+    updateCalc();
+    selectApp("auto");
+  </script>
+</body>
+</html>
