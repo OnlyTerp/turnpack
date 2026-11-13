@@ -123,7 +123,7 @@ def write_hero_svg(theme: str) -> None:
         ("0 Dependencies", p["cyanBg"], p["cyan"], p["cyan"]),
         ("100% Local", p["card2"], p["title"], p["border"]),
         ("Auto Rollback on Fail", p["greenBg"], p["greenText"], p["green"]),
-        ("MIT License", p["card2"], p["body"], p["border"]),
+        ("Apache-2.0", p["card2"], p["body"], p["border"]),
     ]
 
     pill_svg = []

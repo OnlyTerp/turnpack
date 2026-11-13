@@ -64,6 +64,7 @@ First release.
 
 ### Project
 
+- Licensed under the Apache License 2.0, with a `NOTICE` file that travels with every copy: the npm package, the Claude Desktop bundle, and the copy `init` makes under `~/.turnpack`.
 - Zero runtime dependencies, strict TypeScript, tests on Linux, macOS and Windows with Node 22 and 24.
 - `bench/agent-bench.mjs`: a model-in-the-loop comparison of the same task with and without Turnpack, through the agent CLIs you have installed. The first measured run is in the README.
 - `docs/baselines.md`: what Claude Code, Codex, OMP and Grok Build already do without Turnpack, so the docs claim only the difference.

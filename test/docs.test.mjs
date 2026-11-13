@@ -84,6 +84,22 @@ describe("published numbers", () => {
     }
   });
 
+  it("names one licence everywhere, and ships its text and notice", () => {
+    const pkg = JSON.parse(read("package.json"));
+    assert.equal(pkg.license, "Apache-2.0");
+    assert.ok(pkg.files.includes("LICENSE") && pkg.files.includes("NOTICE"));
+    const licence = read("LICENSE");
+    assert.match(licence, /Apache License\s+Version 2\.0, January 2004/);
+    assert.match(licence, /END OF TERMS AND CONDITIONS/);
+    assert.match(read("NOTICE"), /^Turnpack\r?\nCopyright \d{4} OnlyTerp/);
+    const readme = read("README.md");
+    assert.ok(readme.includes("license-Apache--2.0") && readme.includes("[Apache License 2.0](LICENSE)"));
+    // The old licence is not named anywhere a reader or a registry would look.
+    for (const file of ["README.md", "package.json", "CONTRIBUTING.md", "assets/hero-dark.svg", "assets/hero-light.svg", "assets/social-preview.svg"]) {
+      assert.doesNotMatch(read(file), /\bMIT\b/, file);
+    }
+  });
+
   it("every image the README shows exists", () => {
     const readme = read("README.md");
     const shown = [...readme.matchAll(/(?:src|srcset)="(assets\/[^"]+)"/g)].map((match) => match[1]);

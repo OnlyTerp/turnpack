@@ -146,7 +146,7 @@ export async function buildBundle(outDir) {
   }
   const manifest = await buildManifest();
   const entries = [{ name: "manifest.json", data: Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`) }];
-  for (const rel of ["package.json", "LICENSE", "README.md", "SECURITY.md"]) {
+  for (const rel of ["package.json", "LICENSE", "NOTICE", "README.md", "SECURITY.md"]) {
     entries.push({ name: rel, data: fs.readFileSync(path.join(REPO, rel)) });
   }
   // Type declarations and source maps are for people importing the library, not for running it.

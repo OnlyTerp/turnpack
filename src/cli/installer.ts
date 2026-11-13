@@ -137,7 +137,7 @@ export function planLaunch(options: { homeDir: string; npx?: boolean; copy?: boo
   };
 }
 
-const COPIED_ENTRIES = ["dist", "extensions", "package.json", "LICENSE"];
+const COPIED_ENTRIES = ["dist", "extensions", "package.json", "LICENSE", "NOTICE"];
 
 function sameInstalledCopy(from: string, to: string): boolean {
   try {

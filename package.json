@@ -2,7 +2,7 @@
   "name": "turnpack",
   "version": "0.1.0",
   "description": "Fewer back-and-forth AI turns. A local MCP server that gathers context in one call and ships multi-file edits behind your tests, with automatic byte-exact rollback.",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "author": "OnlyTerp (https://github.com/OnlyTerp)",
   "repository": {
     "type": "git",
@@ -50,7 +50,8 @@
     "README.md",
     "SECURITY.md",
     "CHANGELOG.md",
-    "LICENSE"
+    "LICENSE",
+    "NOTICE"
   ],
   "engines": {
     "node": ">=22.0.0"

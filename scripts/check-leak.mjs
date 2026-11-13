@@ -194,6 +194,7 @@ try {
       "package.json",
       "README.md",
       "LICENSE",
+      "NOTICE",
       "dist/cli.js",
       "dist/index.js",
       "dist/index.d.ts",

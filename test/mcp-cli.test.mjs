@@ -778,7 +778,7 @@ describe("installer safety", () => {
     const entry = JSON.parse(fs.readFileSync(claudePath, "utf8")).mcpServers.turnpack;
     assert.deepEqual(entry.args, [path.join(versionDir, "dist", "cli.js"), "serve"]);
     assert.equal(entry.type, "stdio");
-    for (const rel of ["package.json", "dist/cli.js", "dist/tools/batch-runner.js", "extensions/omp-turnpack.ts"]) {
+    for (const rel of ["package.json", "LICENSE", "NOTICE", "dist/cli.js", "dist/tools/batch-runner.js", "extensions/omp-turnpack.ts"]) {
       assert.equal(fs.existsSync(path.join(versionDir, rel)), true, rel);
     }
     assert.deepEqual(fs.readdirSync(path.dirname(versionDir)), [PACKAGE_JSON.version]);
@@ -986,7 +986,8 @@ describe("Claude Desktop bundle", () => {
       assert.equal(manifest.server.mcp_config.env.TURNPACK_ROOT, "${user_config.project_folder}");
       // Everything the manifest starts, and everything the server loads later, is inside.
       const entry = manifest.server.mcp_config.args[0].replace("${__dirname}/", "");
-      for (const needed of [entry, "package.json", "dist/mcp-server.js", "dist/tools/batch-runner.js", "dist/search-worker.js"]) {
+      assert.equal(manifest.license, PACKAGE_JSON.license);
+      for (const needed of [entry, "package.json", "LICENSE", "NOTICE", "dist/mcp-server.js", "dist/tools/batch-runner.js", "dist/search-worker.js"]) {
         assert.equal(files.has(needed), true, needed);
       }
       assert.deepEqual(files.get("dist/cli.js"), fs.readFileSync(CLI_PATH));

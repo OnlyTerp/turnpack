@@ -2,6 +2,8 @@
 
 Contributions are welcome: bug fixes, adapters for more AI apps, benchmark runs, and clearer docs.
 
+Turnpack is licensed under the [Apache License 2.0](LICENSE). By sending a contribution you agree that it is licensed under the same terms (section 5 of the license), and you confirm that you have the right to submit it.
+
 ## Getting started
 
 ```bash

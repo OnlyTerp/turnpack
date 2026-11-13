@@ -13,7 +13,7 @@
 ![Zero dependencies](https://img.shields.io/badge/dependencies-0-10B981?style=flat-square)
 ![No API keys](https://img.shields.io/badge/API%20keys-none-38BDF8?style=flat-square)
 ![Node 22+](https://img.shields.io/badge/node-%3E%3D22-0F172A?style=flat-square)
-![License MIT](https://img.shields.io/badge/license-MIT-64748B?style=flat-square)
+![License Apache 2.0](https://img.shields.io/badge/license-Apache--2.0-64748B?style=flat-square)
 
 **[Try the demo](#try-it-in-10-seconds)** · **[See an example](#what-it-looks-like)** · **[Set it up](#set-it-up)** · **[The three tools](#the-three-tools)** · **[What it saves](#how-much-does-it-save)** · **[Safety](#safety)** · **[FAQ](#faq)**
 
@@ -464,6 +464,10 @@ Turnpack builds on ideas from Anthropic's programmatic tool calling, Cloudflare'
 - [Benchmarks: engine timings and the agent comparison](bench/README.md)
 - [Security policy](SECURITY.md) · [Contributing](CONTRIBUTING.md) · [Changelog](CHANGELOG.md)
 
+## License
+
+[Apache License 2.0](LICENSE). You may use, change and redistribute Turnpack, including in commercial products. If you redistribute it, with or without changes, keep the license and the [NOTICE](NOTICE) file with it and say which files you changed. The license grants no right to use the Turnpack name or logo, beyond saying where the software came from.
+
 <div align="center">
-  <sub>MIT License · Built by <a href="https://github.com/OnlyTerp">OnlyTerp</a></sub>
+  <sub>Apache License 2.0 · Built by <a href="https://github.com/OnlyTerp">OnlyTerp</a></sub>
 </div>
