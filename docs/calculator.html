@@ -108,23 +108,24 @@
 <body>
   <div class="wrap">
     <h1>Turnpack TTFT &amp; Time-Saved Calculator</h1>
-    <p class="sub">Slow Time-to-First-Token (TTFT) and token streaming repeat between <strong>every single AI tool call</strong>. Slide in your provider speed to see how much dead waiting fewer turns eliminate.</p>
+    <p class="sub">Cloud APIs repeat <strong>2s–25s+ TTFT freezes</strong> and token streams between every tool call; dedicated local GPUs enjoy <strong>&lt;1s warm-KV TTFT</strong> but still stream every redundant turn. Slide in your setup below.</p>
 
     <div class="grid">
       <div class="card">
         <h2 style="margin-top:0">1. Provider &amp; Workflow Speed</h2>
         <div class="tabs" id="presets">
-          <button class="preset" data-preset="fast">⚡ Fast Warm API</button>
-          <button class="preset active" data-preset="frontier">🧠 Frontier Reasoning</button>
-          <button class="preset" data-preset="high-ttft">🐢 High-TTFT / Busy</button>
-          <button class="preset" data-preset="local">💻 Local / 70B+ GPU</button>
+          <button class="preset" data-preset="local">💻 Local GPU (Warm KV · 0.5s TTFT)</button>
+          <button class="preset" data-preset="fast">⚡ Fast Warm Cloud</button>
+          <button class="preset active" data-preset="frontier">🧠 Frontier Cloud</button>
+          <button class="preset" data-preset="high-ttft">🐢 Busy / High-TTFT Cloud</button>
+          <button class="preset" data-preset="cold-cloud">⏳ Cold-Cache / Max-Think Cloud</button>
         </div>
 
-        <label><span>Time to First Token (TTFT freeze / call)</span><span id="vTtft">6s</span></label>
-        <input id="ttft" type="range" min="1" max="40" value="6" />
+        <label><span>Time to First Token (TTFT / call)</span><span id="vTtft">6s</span></label>
+        <input id="ttft" type="range" min="0.1" max="40" step="0.1" value="6" />
 
         <label><span>Tokens per intermediate step</span><span id="vTok">360 tok</span></label>
-        <input id="tok" type="range" min="100" max="800" step="20" value="360" />
+        <input id="tok" type="range" min="100" max="800" step="5" value="360" />
 
         <label><span>Provider stream speed (tokens / sec)</span><span id="vTps">30 tok/s</span></label>
         <input id="tps" type="range" min="8" max="120" value="30" />
@@ -198,10 +199,11 @@
       large: { label: "Large (15+ files)", base: 28, tp: 7 },
     };
     const PROVIDER_PRESETS = {
-      fast: { ttft: 2, tok: 220, tps: 45 },
+      local: { ttft: 0.5, tok: 330, tps: 30 },
+      fast: { ttft: 2, tok: 225, tps: 45 },
       frontier: { ttft: 6, tok: 360, tps: 30 },
       "high-ttft": { ttft: 15, tok: 400, tps: 20 },
-      local: { ttft: 25, tok: 450, tps: 18 },
+      "cold-cloud": { ttft: 25, tok: 450, tps: 18 },
     };
     const SNIPPETS = {
       auto: "# 1. Preview safely in a temp folder first (changes 0 of your files)\nnpx turnpack demo\n\n# 2. Preview config diff & wire Claude Code, Codex CLI, or OMP\nnpx turnpack init",

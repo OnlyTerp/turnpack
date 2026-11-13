@@ -224,30 +224,30 @@ def write_ttft_tax_svg(theme: str) -> None:
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 490" width="1200" height="490" role="img" aria-label="TTFT and slow token streaming tax across 16 tool calls vs 4 Turnpack calls">
   <rect width="1200" height="490" rx="20" fill="{p['bg']}" stroke="{p['border']}" stroke-width="1.5"/>
 
-  <text x="58" y="48" fill="{p['title']}" font-family="{FONT_SANS}" font-size="23.5" font-weight="800">Why AI Tool Loops Feel So Slow: You Pay TTFT + Slow Tokens on Every Step</text>
-  <text x="58" y="74" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">Even when reading a file takes 0.02s locally, every separate tool call forces a brand-new provider round-trip:</text>
+  <text x="58" y="48" fill="{p['title']}" font-family="{FONT_SANS}" font-size="23.5" font-weight="800">Why AI Tool Loops Feel Slow: Cloud TTFT + Repeated Token Streams</text>
+  <text x="58" y="74" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">Even when reading a file takes 0.02s on disk, every separate tool call triggers another full model generation turn:</text>
 
   <!-- Section A: Anatomy of ONE Tool Call -->
   <rect x="44" y="94" width="1112" height="148" rx="14" fill="{p['card']}" stroke="{p['border']}" stroke-width="1.2"/>
   <text x="64" y="120" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">ANATOMY OF ONE INTERMEDIATE AI TOOL CALL</text>
 
   <rect x="64" y="132" width="446" height="42" rx="8" fill="{p['red']}" opacity="0.85"/>
-  <text x="287" y="158" text-anchor="middle" fill="#FFFFFF" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">1. Time to First Token (TTFT): 5s–25s+ dead freeze</text>
+  <text x="287" y="158" text-anchor="middle" fill="#FFFFFF" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">1. Cloud TTFT Freeze: 2s–25s+  (Local Warm KV: &lt;1s)</text>
 
   <rect x="514" y="132" width="538" height="42" rx="8" fill="{p['amber']}" opacity="0.86"/>
-  <text x="783" y="158" text-anchor="middle" fill="#0B0F17" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">2. Thinking &amp; Slow Token Stream (15–40 tok/s): 5s–25s+</text>
+  <text x="783" y="158" text-anchor="middle" fill="#0B0F17" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">2. Thinking &amp; Token Stream (18–45 tok/s): 5s–25s+</text>
 
   <rect x="1056" y="132" width="80" height="42" rx="8" fill="{p['green']}"/>
   <text x="1096" y="158" text-anchor="middle" fill="#FFFFFF" font-family="{FONT_MONO}" font-size="12" font-weight="700">0.02s tool</text>
 
   <circle cx="72" cy="196" r="5" fill="{p['red']}"/>
-  <text x="84" y="201" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13">TTFT (Startup Freeze): Queueing + re-reading growing chat history before a single word appears.</text>
+  <text x="84" y="201" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13">Cloud TTFT: API queues, cold-cache routers &amp; deep-thinking prefill (2s–25s+). Dedicated local GPUs hit &lt;1s TTFT.</text>
   <circle cx="72" cy="218" r="5" fill="{p['amber']}"/>
-  <text x="84" y="223" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13">Token Wait: Thinking &amp; tool JSON streamed token-by-token.   Local execution (~20ms) is practically instant.</text>
+  <text x="84" y="223" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13">Token Stream (Cloud &amp; Local): 225–450+ reasoning/tool tokens generated per step — plus raw dumps bloat VRAM KV cache.</text>
 
   <!-- Section B: 16 Calls vs 4 Calls -->
   <text x="58" y="284" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">Normal Chatty Loop — 16 separate tool calls</text>
-  <text x="1142" y="284" text-anchor="end" fill="{p['red']}" font-family="{FONT_MONO}" font-size="13" font-weight="700">16 × (TTFT + token wait) = 5 to 13+ minutes waiting</text>
+  <text x="1142" y="284" text-anchor="end" fill="{p['red']}" font-family="{FONT_MONO}" font-size="13" font-weight="700">16 × (TTFT + token stream) = 2 to 13+ minutes waiting</text>
   <rect x="52" y="308" width="1096" height="52" rx="10" fill="{p['card']}" stroke="{p['border']}" stroke-width="1"/>
   {"".join(loop16_svg)}
   <text x="1030" y="339" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">16× PAID</text>
@@ -256,9 +256,9 @@ def write_ttft_tax_svg(theme: str) -> None:
   <rect x="52" y="390" width="1096" height="44" rx="10" fill="{p['card']}" stroke="{p['green']}" stroke-width="1.3"/>
   {"".join(loop4_svg)}
   <rect x="308" y="396" width="832" height="32" rx="6" fill="{p['greenBg']}"/>
-  <text x="724" y="417" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">12 repeated TTFT freezes + 12 intermediate token streams eliminated (~75% less dead waiting)</text>
+  <text x="724" y="417" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">12 extra turns skipped (~75% less waiting + cleaner context &amp; local VRAM KV cache)</text>
 
-  <text x="58" y="466" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Red = TTFT dead wait per call   ·   Amber = Slow token stream per call   ·   Green = Time your AI skips completely with Turnpack</text>
+  <text x="58" y="466" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Red = TTFT wait per call (2s–25s+ Cloud; &lt;1s Local)   ·   Amber = Token stream per call   ·   Green = Turns skipped with Turnpack</text>
 </svg>
 """
     (ASSETS_DIR / f"ttft-tax-{theme}.svg").write_text(svg, encoding="utf-8")
@@ -267,10 +267,11 @@ def write_ttft_tax_svg(theme: str) -> None:
 def write_time_saved_svg(theme: str) -> None:
     p = PALETTES[theme]
     rows = [
-        ("Fast / Warm-Cache API", "2s TTFT + 5s stream = 7s/turn", 112, 28, "1m 52s", "28s", "Save ~1m 24s / task"),
-        ("Frontier Reasoning", "6s TTFT + 12s stream = 18s/turn", 288, 72, "4m 48s", "1m 12s", "Save ~3m 36s / task"),
-        ("High-TTFT / Busy API", "15s TTFT + 20s stream = 35s/turn", 560, 140, "9m 20s", "2m 20s", "Save ~7m 00s / task"),
-        ("Slow-Prefill / Local GPU", "25s TTFT + 25s @ 18 tok/s = 50s/turn", 800, 200, "13m 20s", "3m 20s", "Save ~10m 00s / task"),
+        ("Local GPU · Warm KV", "0.5s TTFT + 11s gen = 11.5s", 184, 46, "3m 04s", "46s", "Save ~2m 18s / task"),
+        ("Fast Warm Cloud API", "2s TTFT + 5s stream = 7s", 112, 28, "1m 52s", "28s", "Save ~1m 24s / task"),
+        ("Frontier Cloud Reasoning", "6s TTFT + 12s stream = 18s", 288, 72, "4m 48s", "1m 12s", "Save ~3m 36s / task"),
+        ("Busy / High-TTFT Cloud", "15s TTFT + 20s stream = 35s", 560, 140, "9m 20s", "2m 20s", "Save ~7m 00s / task"),
+        ("Cold-Cache Cloud / Max-Think", "25s TTFT + 25s stream = 50s", 800, 200, "13m 20s", "3m 20s", "Save ~10m 00s / task"),
     ]
 
     bars_svg = []
@@ -281,7 +282,7 @@ def write_time_saved_svg(theme: str) -> None:
         base_w = max(24, int((base_sec / max_sec) * max_bar))
         tp_w = max(14, int((tp_sec / max_sec) * max_bar))
         bars_svg.append(
-            f'<text x="58" y="{y}" fill="{p["title"]}" font-family="{FONT_SANS}" font-size="15" font-weight="700">{title} '
+            f'<text x="58" y="{y}" fill="{p["title"]}" font-family="{FONT_SANS}" font-size="14.5" font-weight="700">{title} '
             f'<tspan fill="{p["muted"]}" font-family="{FONT_MONO}" font-size="11.5" font-weight="500">({sub})</tspan></text>'
             f'<text x="708" y="{y}" text-anchor="end" fill="{p["green"]}" font-family="{FONT_MONO}" font-size="12.5" font-weight="700">{save_lbl}</text>'
             f'<rect x="58" y="{y + 10}" width="{max_bar}" height="20" rx="5" fill="{p["track"]}"/>'
@@ -291,44 +292,47 @@ def write_time_saved_svg(theme: str) -> None:
             f'<rect x="58" y="{y + 35}" width="{tp_w}" height="20" rx="5" fill="{p["green"]}"/>'
             f'<text x="{58 + max_bar + 14}" y="{y + 50}" fill="{p["greenText"]}" font-family="{FONT_MONO}" font-size="12" font-weight="700">Turnpack 4t: ~{tp_lbl}</text>'
         )
-        y += 100
+        y += 96
 
     weekly_rows = [
-        ("Fast Warm API (7s/turn)", "~2.3 hrs / wk", p["body"]),
-        ("Frontier Reasoning (18s/turn)", "~6.0 hrs / wk", p["title"]),
-        ("High-TTFT / Busy (35s/turn)", "~11.7 hrs / wk", p["greenText"]),
-        ("Local / Slow GPU (50s/turn)", "~16.7 hrs / wk", p["green"]),
+        ("Local GPU · 0.5s TTFT (11.5s/t)", "~3.8 hrs / wk", p["cyan"]),
+        ("Fast Warm Cloud API (7s/t)", "~2.3 hrs / wk", p["body"]),
+        ("Frontier Cloud (18s/t)", "~6.0 hrs / wk", p["title"]),
+        ("Busy / High-TTFT Cloud (35s/t)", "~11.7 hrs / wk", p["greenText"]),
+        ("Cold-Cache / Max-Think (50s/t)", "~16.7 hrs / wk", p["green"]),
     ]
     wk_svg = []
-    wy = 196
+    wy = 190
     for lbl, hrs, clr in weekly_rows:
         wk_svg.append(
-            f'<rect x="762" y="{wy}" width="366" height="44" rx="9" fill="{p["card2"]}" stroke="{p["border"]}" stroke-width="1"/>'
-            f'<text x="778" y="{wy + 27}" fill="{p["body"]}" font-family="{FONT_SANS}" font-size="13.5" font-weight="600">{lbl}</text>'
-            f'<text x="1112" y="{wy + 27}" text-anchor="end" fill="{clr}" font-family="{FONT_MONO}" font-size="14" font-weight="700">{hrs}</text>'
+            f'<rect x="762" y="{wy}" width="366" height="42" rx="9" fill="{p["card2"]}" stroke="{p["border"]}" stroke-width="1"/>'
+            f'<text x="778" y="{wy + 26}" fill="{p["body"]}" font-family="{FONT_SANS}" font-size="13" font-weight="600">{lbl}</text>'
+            f'<text x="1112" y="{wy + 26}" text-anchor="end" fill="{clr}" font-family="{FONT_MONO}" font-size="13.5" font-weight="700">{hrs}</text>'
         )
-        wy += 54
+        wy += 50
 
-    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 555" width="1200" height="555" role="img" aria-label="Time saved by provider TTFT and token speed">
-  <rect width="1200" height="555" rx="20" fill="{p['bg']}" stroke="{p['border']}" stroke-width="1.5"/>
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" width="1200" height="640" role="img" aria-label="Time saved across Local GPU warm KV cache and Cloud TTFT speeds">
+  <rect width="1200" height="640" rx="20" fill="{p['bg']}" stroke="{p['border']}" stroke-width="1.5"/>
 
-  <text x="58" y="48" fill="{p['title']}" font-family="{FONT_SANS}" font-size="24" font-weight="800">Real-World Waiting Time Saved by Provider Speed (16-Turn Task → 4 Turns)</text>
-  <text x="58" y="74" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">The slower your model's Time-to-First-Token (TTFT) or token speed (tok/s), the bigger difference fewer turns makes:</text>
+  <text x="58" y="48" fill="{p['title']}" font-family="{FONT_SANS}" font-size="24" font-weight="800">Real-World Waiting Time Saved: Local GPU vs. Cloud Providers (16t → 4t)</text>
+  <text x="58" y="74" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">Local GPUs enjoy sub-second TTFT but still stream every tool step; slow Cloud APIs multiply both TTFT freezes and tok/s waits:</text>
 
   {"".join(bars_svg)}
 
   <!-- Weekly Impact Highlight Box -->
-  <rect x="738" y="104" width="414" height="390" rx="16" fill="{p['card']}" stroke="{p['green']}" stroke-width="1.4"/>
-  <rect x="762" y="126" width="366" height="28" rx="14" fill="{p['greenBg']}"/>
-  <text x="945" y="145" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">WEEKLY HOURS RECLAIMED (20 tasks/day · 5d/wk)</text>
-  <text x="762" y="178" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13.5">12 eliminated round-trips × 100 tasks/week:</text>
+  <rect x="738" y="102" width="414" height="474" rx="16" fill="{p['card']}" stroke="{p['green']}" stroke-width="1.4"/>
+  <rect x="762" y="124" width="366" height="28" rx="14" fill="{p['greenBg']}"/>
+  <text x="945" y="143" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">WEEKLY HOURS RECLAIMED (20 tasks/day · 5d/wk)</text>
+  <text x="762" y="174" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13.5">12 eliminated round-trips × 100 tasks/week:</text>
 
   {"".join(wk_svg)}
 
-  <text x="762" y="434" fill="{p['title']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">+ Context grows slower too:</text>
-  <text x="762" y="456" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">Avoids 100k+ token TTFT spikes &amp; broken half-edits.</text>
+  <text x="762" y="468" fill="{p['title']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">+ Built for Local GPUs &amp; Cloud alike:</text>
+  <text x="762" y="490" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Local GPU: &lt;1s TTFT; ~823-tok schema protects VRAM KV</text>
+  <text x="762" y="510" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Cloud API: skips cold-cache 100k+ prefill &amp; queues</text>
+  <text x="762" y="530" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Both: skips 12× token streams &amp; broken half-edits</text>
 
-  <text x="58" y="530" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Transparent math: turns_saved × (TTFT + tokens_per_turn ÷ tok/s). Plug in your own provider with npx turnpack estimate.</text>
+  <text x="58" y="612" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">Transparent math: turns_saved × (TTFT + tokens_per_turn ÷ tok/s). Plug in your own setup with npx turnpack estimate.</text>
 </svg>
 """
     (ASSETS_DIR / f"time-saved-{theme}.svg").write_text(svg, encoding="utf-8")

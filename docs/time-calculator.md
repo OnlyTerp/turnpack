@@ -13,17 +13,18 @@ hours_saved_per_month = hours_saved_per_week × 4.3
 ## Why TTFT + Token Speed Compound
 
 When an AI calls 16 small tools sequentially, you do not just wait for local disk I/O (~20ms) — you pay:
-1. **Time to First Token (`TTFT`)**: queueing, prompt prefill, and reasoning startup freeze *before* the first character streams back.
-2. **Thinking & Token Streaming (`tokens_per_turn ÷ tok/s`)**: generating thoughts and JSON arguments for each intermediate step.
+1. **Time to First Token (`TTFT`)**: dedicated local GPUs (`llama.cpp`, `Ollama`, `vLLM`, `LM Studio`, `MLX`) with warm in-VRAM KV cache hit **sub-second (`~0.2s–1s`) TTFT** with zero queue, whereas congested cloud APIs, cold-cache stateless routers re-prefilling 100k+ tokens, and extended-thinking endpoints pause **`2s–25s+`** before emitting a single character.
+2. **Thinking & Token Streaming (`tokens_per_turn ÷ tok/s`)**: both local and cloud models still generate intermediate reasoning and JSON arguments token-by-token on every step — while bloated tool responses risk evicting local VRAM KV cache.
 
 ## Reference Provider Profiles
 
 | Profile (`--profile`) | TTFT / Call | Tokens / Intermediate Turn | Stream Speed | Total Wait / Turn | Weekly Saved (`20` medium tasks/d, `5d/wk`) |
 | :--- | ---: | ---: | ---: | ---: | ---: |
-| `fast` (Fast / Warm-Cache API) | 2s | 225 tok | 45 tok/s (`5s`) | `7s/turn` | `~2.3 hrs/wk` |
-| `frontier` *(default)* (Frontier Reasoning) | 6s | 360 tok | 30 tok/s (`12s`) | `18s/turn` | `~6.0 hrs/wk` |
-| `high-ttft` (High-TTFT / Busy Provider) | 15s | 400 tok | 20 tok/s (`20s`) | `35s/turn` | `~11.7 hrs/wk` |
-| `local` (Slow-Prefill / Local 70B+ GPU) | 25s | 450 tok | 18 tok/s (`25s`) | `50s/turn` | `~16.7 hrs/wk` |
+| `local` (Local GPU, Warm KV Cache) | 0.5s | 330 tok | 30 tok/s (`11s`) | `11.5s/turn` | `~3.8 hrs/wk` |
+| `fast` (Fast Cloud API, Warm Cache) | 2s | 225 tok | 45 tok/s (`5s`) | `7s/turn` | `~2.3 hrs/wk` |
+| `frontier` *(default)* (Frontier Cloud Reasoning) | 6s | 360 tok | 30 tok/s (`12s`) | `18s/turn` | `~6.0 hrs/wk` |
+| `high-ttft` (High-TTFT / Busy Cloud API) | 15s | 400 tok | 20 tok/s (`20s`) | `35s/turn` | `~11.7 hrs/wk` |
+| `cold-cloud` (Cold-Cache Cloud Router / Max Thinking) | 25s | 450 tok | 18 tok/s (`25s`) | `50s/turn` | `~16.7 hrs/wk` |
 
 ## Task Scope Profiles (`--size`)
 
@@ -33,9 +34,10 @@ When an AI calls 16 small tools sequentially, you do not just wait for local dis
 | `medium` *(default)* | 16 turns | 4 turns | 6–10 file feature + verification |
 | `large` | 28 turns | 7 turns | 15+ file cross-module refactor |
 
-Customize for your exact provider anytime:
+Customize for your exact local or cloud setup anytime:
 
 ```bash
-npx turnpack estimate --profile high-ttft
-npx turnpack estimate --ttft 15 --tok-per-turn 400 --tps 20
+npx turnpack estimate --profile local
+npx turnpack estimate --profile cold-cloud
+npx turnpack estimate --ttft 0.5 --tok-per-turn 330 --tps 30
 ```

@@ -1,5 +1,5 @@
 export type ProjectSize = "small" | "medium" | "large";
-export type ProviderProfile = "fast" | "frontier" | "high-ttft" | "local";
+export type ProviderProfile = "local" | "fast" | "frontier" | "high-ttft" | "cold-cloud";
 
 export interface EstimateInput {
   promptsPerDay: number;
@@ -31,15 +31,21 @@ const PROVIDER_PROFILES: Record<
   ProviderProfile,
   { label: string; ttftSec: number; tokensPerTurn: number; tokensPerSec: number }
 > = {
-  fast: { label: "Fast / Warm-Cache API", ttftSec: 2, tokensPerTurn: 225, tokensPerSec: 45 },
-  frontier: { label: "Frontier Reasoning Model", ttftSec: 6, tokensPerTurn: 360, tokensPerSec: 30 },
+  local: { label: "Local GPU (Warm KV Cache, 0 Queue)", ttftSec: 0.5, tokensPerTurn: 330, tokensPerSec: 30 },
+  fast: { label: "Fast Cloud API (Warm Cache)", ttftSec: 2, tokensPerTurn: 225, tokensPerSec: 45 },
+  frontier: { label: "Frontier Cloud Reasoning", ttftSec: 6, tokensPerTurn: 360, tokensPerSec: 30 },
   "high-ttft": {
-    label: "High-TTFT / Deep Thinking / Busy Provider",
+    label: "High-TTFT / Busy Cloud API",
     ttftSec: 15,
     tokensPerTurn: 400,
     tokensPerSec: 20,
   },
-  local: { label: "Slow-Prefill / Local 70B+ GPU", ttftSec: 25, tokensPerTurn: 450, tokensPerSec: 18 },
+  "cold-cloud": {
+    label: "Cold-Cache Cloud Router / Max Thinking",
+    ttftSec: 25,
+    tokensPerTurn: 450,
+    tokensPerSec: 18,
+  },
 };
 
 export function calculateEstimate(input: EstimateInput): EstimateResult {
@@ -95,12 +101,17 @@ export function runEstimate(argv: string[]): EstimateResult {
       i += 1;
     } else if (
       arg === "--profile" &&
-      (next === "fast" || next === "frontier" || next === "high-ttft" || next === "local")
+      (next === "local" ||
+        next === "fast" ||
+        next === "frontier" ||
+        next === "high-ttft" ||
+        next === "cold-cloud")
     ) {
       providerProfile = next;
       i += 1;
     } else if (arg === "--ttft" && next) {
-      ttftOverride = Math.max(0.5, Math.min(120, Number(next) || 6));
+      const parsed = Number(next);
+      ttftOverride = Math.max(0.1, Math.min(120, Number.isFinite(parsed) && parsed > 0 ? parsed : 6));
       i += 1;
     } else if (arg === "--tok-per-turn" && next) {
       tokPerTurnOverride = Math.max(40, Math.min(4000, Number(next) || 360));
@@ -171,7 +182,7 @@ export function runEstimate(argv: string[]): EstimateResult {
   );
   if (ttftSeconds !== undefined && streamSeconds !== undefined) {
     process.stdout.write(
-      `  1 Turn   : ${ttftSeconds}s TTFT startup freeze + ${streamSeconds}s thinking/stream = ${turnSeconds}s/turn\n\n`,
+      `  1 Turn   : ${ttftSeconds}s TTFT + ${streamSeconds}s token stream = ${turnSeconds}s/turn\n\n`,
     );
   } else {
     process.stdout.write(`  1 Turn   : ${turnSeconds}s per round-trip\n\n`);
@@ -192,13 +203,13 @@ export function runEstimate(argv: string[]): EstimateResult {
   );
 
   process.stdout.write("  Across provider speeds (for your selected workload):\n");
-  for (const key of ["fast", "frontier", "high-ttft", "local"] as const) {
+  for (const key of ["local", "fast", "frontier", "high-ttft", "cold-cloud"] as const) {
     const p = PROVIDER_PROFILES[key];
     const pStream = Number((p.tokensPerTurn / p.tokensPerSec).toFixed(1));
     const pSec = Number((p.ttftSec + pStream).toFixed(1));
     const cmp = calculateEstimate({ promptsPerDay, size, turnSeconds: pSec, daysPerWeek });
     process.stdout.write(
-      `    - ${p.label.padEnd(44)} ${String(p.ttftSec).padStart(2)}s TTFT + ${String(pStream).padStart(4)}s gen = ${String(pSec).padStart(4)}s/turn -> ~${cmp.hoursSavedPerWeek} hrs/wk\n`,
+      `    - ${p.label.padEnd(44)} ${String(p.ttftSec).padStart(4)}s TTFT + ${String(pStream).padStart(4)}s gen = ${String(pSec).padStart(4)}s/turn -> ~${cmp.hoursSavedPerWeek} hrs/wk\n`,
     );
   }
   process.stdout.write("──────────────────────────────────────────────────────────────────────────────\n");

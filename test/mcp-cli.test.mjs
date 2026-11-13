@@ -182,6 +182,16 @@ describe("MCP server framing, schema budget & CLI lifecycle", () => {
     assert.equal(estJson.turnsSavedPerTask, 12);
     assert.equal(estJson.hoursSavedPerWeek, 2.7);
 
+    const localProfile = JSON.parse(
+      execFileSync(process.execPath, [CLI_PATH, "estimate", "--profile", "local", "--json"], {
+        encoding: "utf8",
+      }),
+    );
+    assert.equal(localProfile.input.ttftSeconds, 0.5);
+    assert.equal(localProfile.input.streamSeconds, 11);
+    assert.equal(localProfile.input.turnSeconds, 11.5);
+    assert.equal(localProfile.hoursSavedPerWeek, 3.8);
+
     const highTtft = JSON.parse(
       execFileSync(
         process.execPath,
@@ -194,15 +204,27 @@ describe("MCP server framing, schema budget & CLI lifecycle", () => {
     assert.equal(highTtft.input.streamSeconds, 20);
     assert.equal(highTtft.hoursSavedPerWeek, 11.7);
 
-    const customTtft = JSON.parse(
+    const coldCloud = JSON.parse(
       execFileSync(
         process.execPath,
-        [CLI_PATH, "estimate", "--ttft", "12", "--tok-per-turn", "300", "--tps", "15", "--json"],
+        [CLI_PATH, "estimate", "--profile", "cold-cloud", "--json"],
         { encoding: "utf8" },
       ),
     );
-    assert.equal(customTtft.input.turnSeconds, 32);
-    assert.equal(customTtft.input.ttftSeconds, 12);
-    assert.equal(customTtft.input.streamSeconds, 20);
+    assert.equal(coldCloud.input.ttftSeconds, 25);
+    assert.equal(coldCloud.input.streamSeconds, 25);
+    assert.equal(coldCloud.input.turnSeconds, 50);
+    assert.equal(coldCloud.hoursSavedPerWeek, 16.7);
+
+    const customSubSec = JSON.parse(
+      execFileSync(
+        process.execPath,
+        [CLI_PATH, "estimate", "--ttft", "0.2", "--tok-per-turn", "300", "--tps", "50", "--json"],
+        { encoding: "utf8" },
+      ),
+    );
+    assert.equal(customSubSec.input.ttftSeconds, 0.2);
+    assert.equal(customSubSec.input.streamSeconds, 6);
+    assert.equal(customSubSec.input.turnSeconds, 6.2);
   });
 });

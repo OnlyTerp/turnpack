@@ -22,12 +22,12 @@
 
 ## Why Your AI Feels Slow (In Plain English)
 
-Even the smartest coding AI spends most of its wall-clock time **waiting on Time-to-First-Token (`TTFT`) freezes and slow token streaming between tool calls**, not thinking once:
+Even the smartest coding AI spends most of its wall-clock time **waiting between repeated tool calls**, not thinking once:
 
-Every single time an AI searches one folder or opens one file by itself, you wait through **a full provider round-trip**:
-- **Startup freeze (`TTFT`):** queuing + re-reading your growing chat history before a single token appears (`2s–25s+` depending on provider load, reasoning depth, and context length).
-- **Token-by-token wait (`tok/s`):** streaming reasoning + tool JSON (`15–45 tok/s`), repeated over and over across 10–25 steps.
-- **Half-edited breakage:** when an AI edits two files sequentially and tests fail, your repo stays broken while it burns even more slow turns undoing mistakes.
+Every single time an AI searches one folder or opens one file by itself, you wait through **another full generation turn**:
+- **Cloud `TTFT` freezes (`2s–25s+`):** API queues, cold-cache stateless routers re-prefilling 100k+ context, and deep-thinking startup delays before a single token appears. *(Dedicated local GPUs on `llama.cpp` / `Ollama` / `vLLM` / `MLX` with a warm KV cache usually hit sub-second `<1s` TTFT!)*
+- **Repeated token streaming (`18–45 tok/s`):** both cloud and local models still have to generate hundreds of reasoning + tool JSON tokens token-by-token on every step — and noisy raw search outputs bloat context / local VRAM KV cache.
+- **Half-edited breakage:** when an AI edits two files sequentially and tests fail, your repo stays broken while it burns even more turns undoing mistakes.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/ttft-tax-dark.svg" />
@@ -121,25 +121,28 @@ See [docs/harness-matrix.md](docs/harness-matrix.md) for exact file paths, frami
 
 ## How Much Time Does It Save?
 
-The slower your provider's **Time-to-First-Token (`TTFT`)** or **token output speed (`tok/s`)**, the bigger difference fewer round-trips makes. Every skipped turn avoids another `TTFT` startup freeze plus another token-streaming wait:
+Local GPUs with a warm KV cache enjoy **sub-second (`<1s`) TTFT** with zero cloud queue, yet still wait on token generation across redundant tool steps and precious VRAM KV space. Cloud APIs pay **both** `TTFT` startup/prefill freezes and `tok/s` streaming delays on every turn:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/time-saved-dark.svg" />
   <source media="(prefers-color-scheme: light)" srcset="assets/time-saved-light.svg" />
-  <img alt="Visual chart showing real-world waiting time saved across fast, frontier, high-TTFT, and local providers" src="assets/time-saved-dark.svg" width="100%" />
+  <img alt="Visual chart showing real-world waiting time saved across local GPU warm KV cache and cloud TTFT profiles" src="assets/time-saved-dark.svg" width="100%" />
 </picture>
 
-| Provider Latency Profile *(16 turns → 4 turns)* | 1 Turn (`TTFT + token stream`) | Single-Task Wait (`Before → After`) | Weekly Saved (`20 tasks/d, 5d/wk`) |
+| Inference Profile *(16 turns → 4 turns)* | 1 Turn (`TTFT + token stream`) | Single-Task Wait (`Before → After`) | Weekly Saved (`20 tasks/d, 5d/wk`) |
 | :--- | :--- | :--- | ---: |
-| **Fast / Warm-Cache API** | `2s TTFT + 5s @ 45 tok/s = 7s` | `~1m 52s` → `~28s` (**save `~1m 24s`**) | **`~2.3 hrs / week`** |
-| **Frontier Reasoning Model** | `6s TTFT + 12s @ 30 tok/s = 18s` | `~4m 48s` → `~1m 12s` (**save `~3m 36s`**) | **`~6.0 hrs / week`** |
-| **High-TTFT / Deep Thinking / Busy API** | `15s TTFT + 20s @ 20 tok/s = 35s` | `~9m 20s` → `~2m 20s` (**save `~7m 00s`**) | **`~11.7 hrs / week`** |
-| **Slow-Prefill / Local 70B+ GPU** | `25s TTFT + 25s @ 18 tok/s = 50s` | `~13m 20s` → `~3m 20s` (**save `~10m 00s`**) | **`~16.7 hrs / week`** |
+| **Local GPU (Warm KV Cache, 0 Queue)** | `0.5s TTFT + 11s @ 30 tok/s = 11.5s` | `~3m 04s` → `~46s` (**save `~2m 18s`**) | **`~3.8 hrs / week`** |
+| **Fast Cloud API (Warm Cache)** | `2s TTFT + 5s @ 45 tok/s = 7s` | `~1m 52s` → `~28s` (**save `~1m 24s`**) | **`~2.3 hrs / week`** |
+| **Frontier Cloud Reasoning** | `6s TTFT + 12s @ 30 tok/s = 18s` | `~4m 48s` → `~1m 12s` (**save `~3m 36s`**) | **`~6.0 hrs / week`** |
+| **High-TTFT / Busy Cloud API** | `15s TTFT + 20s @ 20 tok/s = 35s` | `~9m 20s` → `~2m 20s` (**save `~7m 00s`**) | **`~11.7 hrs / week`** |
+| **Cold-Cache Cloud Router / Max Thinking** | `25s TTFT + 25s @ 18 tok/s = 50s` | `~13m 20s` → `~3m 20s` (**save `~10m 00s`**) | **`~16.7 hrs / week`** |
 
+- **Why Local GPU & Open-Weight Builders Love Turnpack:** `100%` offline (`0` API keys, `0` telemetry), an ultra-small `3,289`-byte (`~823`-token) MCP tool schema, and bounded `pack`/`batch` slices that keep raw repo grep dumps from evicting your **VRAM KV cache**.
 - **Plug in your own TTFT & `tok/s` in your terminal:**
   ```bash
-  npx turnpack estimate --profile high-ttft
-  npx turnpack estimate --ttft 15 --tok-per-turn 400 --tps 20
+  npx turnpack estimate --profile local
+  npx turnpack estimate --profile cold-cloud
+  npx turnpack estimate --ttft 0.5 --tok-per-turn 330 --tps 30
   ```
 - **Open the interactive visual slider page:** [docs/calculator.html](docs/calculator.html) *(and exact formula in [docs/time-calculator.md](docs/time-calculator.md))*
 
