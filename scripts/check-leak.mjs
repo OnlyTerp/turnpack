@@ -125,21 +125,40 @@ function walkAndCheck(rootDir, currentDir = rootDir) {
 // 1. Working tree check
 walkAndCheck(repoRoot);
 
-// 2. Git history author/email check if commits exist
+// 2. Git history identity check.
+//
+// Commits made under the project's own name must carry the GitHub noreply address, so the
+// maintainer's private email cannot slip into public history. Everyone else's commits are left
+// alone: requiring every author to be the maintainer made this gate fail on any outside pull
+// request, and on the merge commit GitHub creates for one.
+//
+// For full coverage on the maintainer's side, also turn on GitHub's own server-side guard:
+// Settings -> Emails -> "Block command line pushes that expose my email".
 try {
+  const brand = j("Only", "T", "erp");
   const log = execFileSync("git", ["log", "--format=%an|%ae|%cn|%ce"], {
     cwd: repoRoot,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "ignore"],
   });
+  const seen = new Set();
   for (const line of log.split(/\r?\n/)) {
-    if (!line.trim()) continue;
-    if (!line.includes(j("Only", "T", "erp")) || !line.includes("users.noreply.github.com")) {
-      failures.push(`git log identity not sanitized: ${line}`);
+    if (!line.trim() || seen.has(line)) continue;
+    seen.add(line);
+    const [authorName = "", authorEmail = "", committerName = "", committerEmail = ""] = line.split("|");
+    for (const [name, email] of [
+      [authorName, authorEmail],
+      [committerName, committerEmail],
+    ]) {
+      if (name.includes(brand) && !email.endsWith("users.noreply.github.com")) {
+        failures.push(`git log identity not sanitized: ${name} <${email}>`);
+      }
     }
+    // The same forbidden patterns that apply to file contents apply to names and emails.
+    checkTextContent(`git identity "${line}"`, line);
   }
 } catch {
-  // Repo may have zero commits before initial commit.
+  // Not a git checkout (for example an extracted tarball): nothing to check.
 }
 
 // 3. npm pack tarball check inside isolated temp dir
@@ -149,12 +168,12 @@ const packStage = fs.mkdtempSync(path.join(stageBase, "turnpack-packcheck-"));
 try {
   const packed =
     process.platform === "win32"
-      ? execFileSync("cmd.exe", ["/d", "/s", "/c", "npm", "pack", "--pack-destination", packStage, "--json"], {
-          cwd: repoRoot,
-          encoding: "utf8",
-          windowsHide: true,
-        })
-      : execFileSync("npm", ["pack", "--pack-destination", packStage, "--json"], {
+      ? execFileSync(
+          "cmd.exe",
+          ["/d", "/s", "/c", "npm", "pack", "--ignore-scripts", "--pack-destination", packStage, "--json"],
+          { cwd: repoRoot, encoding: "utf8", windowsHide: true },
+        )
+      : execFileSync("npm", ["pack", "--ignore-scripts", "--pack-destination", packStage, "--json"], {
           cwd: repoRoot,
           encoding: "utf8",
         });
@@ -166,7 +185,26 @@ try {
     const extractDir = path.join(packStage, "extracted");
     fs.mkdirSync(extractDir, { recursive: true });
     execFileSync("tar", ["-xzf", path.join(packStage, tgzName), "-C", extractDir]);
-    walkAndCheck(path.join(extractDir, "package"));
+    const packageDir = path.join(extractDir, "package");
+    walkAndCheck(packageDir);
+
+    // The tarball must be runnable as published: a missing build or a `files` slip shows up
+    // here instead of as "command not found" for the first person who runs npx.
+    for (const required of [
+      "package.json",
+      "README.md",
+      "LICENSE",
+      "dist/cli.js",
+      "dist/index.js",
+      "dist/index.d.ts",
+      "dist/mcp-server.js",
+      "dist/tools/batch-runner.js",
+      "extensions/omp-turnpack.ts",
+    ]) {
+      if (!fs.existsSync(path.join(packageDir, required))) {
+        failures.push(`npm tarball is missing ${required} (run "npm run build" before packing)`);
+      }
+    }
   }
 } finally {
   fs.rmSync(packStage, { recursive: true, force: true });

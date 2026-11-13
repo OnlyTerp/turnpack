@@ -3,8 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
+import { pathToFileURL } from "node:url";
+import { applyClientRoots, createRootPolicy, resolveToolRoot } from "../dist/roots.js";
 import {
   getShardCacheDir,
+  isInsideDir,
+  isProtectedPath,
   isSecretPath,
   resolveSafePath,
   writePrivateShard,
@@ -83,6 +87,103 @@ describe("security & confinement", () => {
     assert.equal(isSecretPath("config/.env.template"), false);
     assert.equal(isSecretPath(".ssh/id_ed25519.pub"), false);
     assert.equal(isSecretPath("src/auth/env.ts"), false);
+
+    for (const secret of [
+      ".envrc",
+      "deploy/production.env",
+      "infra/terraform.tfstate",
+      "infra/prod.tfvars",
+      "android/release.keystore",
+      "home/.kube/config",
+      "home/.docker/config.json",
+      ".git/config",
+      "config/secrets.yaml",
+      ".pgpass",
+      "ops/putty.ppk",
+    ]) {
+      assert.equal(isSecretPath(secret), true, secret);
+    }
+    for (const plain of ["example.env", "docs/config.json", "src/config.ts", "kube/config.md", "environment.ts"]) {
+      assert.equal(isSecretPath(plain), false, plain);
+    }
+  });
+
+  it("marks the paths ship must never write: its own config and git internals", () => {
+    for (const locked of [".turnpack.json", "./.turnpack.json", ".git", ".git/config", ".git/hooks/pre-commit", ".GIT/hooks/x"]) {
+      assert.equal(isProtectedPath(locked), true, locked);
+    }
+    for (const open of [".github/workflows/ci.yml", ".gitignore", "src/.turnpack.json", "git/hooks/x", "docs/turnpack.json"]) {
+      assert.equal(isProtectedPath(open), false, open);
+    }
+  });
+
+  it("compares directories without being fooled by shared name prefixes", () => {
+    assert.equal(isInsideDir(repoDir, repoDir), true);
+    assert.equal(isInsideDir(repoDir, path.join(repoDir, "src", "ok.ts")), true);
+    assert.equal(isInsideDir(repoDir, outsideDir), false);
+    assert.equal(isInsideDir(repoDir, `${repoDir}-sibling`), false);
+    assert.equal(isInsideDir(repoDir, path.dirname(repoDir)), false);
+  });
+
+  it("resolves a tool root only inside the server's policy", () => {
+    const realRepo = fs.realpathSync(repoDir);
+    delete process.env.TURNPACK_ROOT;
+    delete process.env.CLAUDE_PROJECT_DIR;
+    const policy = createRootPolicy(repoDir);
+    assert.deepEqual(policy, { roots: [realRepo], source: "cwd" });
+
+    assert.equal(resolveToolRoot(policy), realRepo);
+    assert.equal(resolveToolRoot(policy, ""), realRepo);
+    assert.equal(resolveToolRoot(policy, "."), realRepo);
+    assert.equal(resolveToolRoot(policy, "src"), path.join(realRepo, "src"));
+    assert.equal(resolveToolRoot(policy, path.join(repoDir, "src")), path.join(realRepo, "src"));
+
+    for (const escape of ["..", "../outside", outsideDir, path.parse(repoDir).root, "src/../../outside", "missing-dir"]) {
+      assert.throws(() => resolveToolRoot(policy, escape), /ERR_ROOT_OUTSIDE_WORKSPACE/, escape);
+    }
+    assert.throws(() => resolveToolRoot(policy, 42), /must be a string/);
+  });
+
+  it("lets client roots replace the launch directory, but never an explicit TURNPACK_ROOT", () => {
+    const realOutside = fs.realpathSync(outsideDir);
+    const fromCwd = createRootPolicy(repoDir);
+
+    const adopted = applyClientRoots(fromCwd, [
+      { uri: pathToFileURL(outsideDir).href },
+      { uri: "https://example.com/not-a-folder" },
+      { uri: pathToFileURL(path.join(tmpRoot, "does-not-exist")).href },
+      "garbage",
+    ]);
+    assert.deepEqual(adopted, { roots: [realOutside], source: "client" });
+    assert.throws(() => resolveToolRoot(adopted, repoDir), /ERR_ROOT_OUTSIDE_WORKSPACE/);
+
+    assert.equal(applyClientRoots(fromCwd, []), fromCwd);
+    assert.equal(applyClientRoots(fromCwd, "nope"), fromCwd);
+
+    // Claude Code names the project through CLAUDE_PROJECT_DIR rather than the launch directory.
+    process.env.CLAUDE_PROJECT_DIR = repoDir;
+    try {
+      const fromProject = createRootPolicy(outsideDir);
+      assert.deepEqual(fromProject, { roots: [fs.realpathSync(repoDir)], source: "project" });
+      assert.equal(applyClientRoots(fromProject, [{ uri: pathToFileURL(outsideDir).href }]).source, "client");
+      process.env.CLAUDE_PROJECT_DIR = path.join(tmpRoot, "does-not-exist");
+      assert.equal(createRootPolicy(outsideDir).source, "cwd");
+    } finally {
+      delete process.env.CLAUDE_PROJECT_DIR;
+    }
+
+    const prev = process.env.TURNPACK_ROOT;
+    process.env.TURNPACK_ROOT = repoDir;
+    try {
+      const pinned = createRootPolicy(outsideDir);
+      assert.equal(pinned.source, "env");
+      assert.equal(applyClientRoots(pinned, [{ uri: pathToFileURL(outsideDir).href }]), pinned);
+      process.env.TURNPACK_ROOT = path.join(tmpRoot, "does-not-exist");
+      assert.throws(() => createRootPolicy(outsideDir), /does not name an existing directory/);
+    } finally {
+      if (prev === undefined) delete process.env.TURNPACK_ROOT;
+      else process.env.TURNPACK_ROOT = prev;
+    }
   });
 
   it("writes private shards outside the workspace cache dir and respects cache dir isolation", () => {

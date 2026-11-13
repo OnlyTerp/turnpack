@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { runBatchDetailed, type BatchIsolation } from "../tools/batch.js";
+import { bold, green, red, rule, yellow } from "./style.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -11,6 +13,8 @@ export interface DoctorCheck {
   name: string;
   ok: boolean;
   detail: string;
+  /** A passing check that is still worth the reader's attention. */
+  warn?: boolean;
 }
 
 export interface DoctorReport {
@@ -20,6 +24,7 @@ export interface DoctorReport {
   schemaBytes: number;
   estimatedSchemaTokens: number;
   handshakeMs: number;
+  batchIsolation: BatchIsolation | null;
   checks: DoctorCheck[];
 }
 
@@ -28,28 +33,38 @@ function getCliEntryPath(): string {
   return path.resolve(here, "..", "cli.js");
 }
 
-async function probeMcpLoopback(tempDir: string): Promise<{
-  toolsBytes: number;
-  toolNames: string[];
-  packRedacted: boolean;
+interface LoopbackResult {
+  responses: Map<number, Record<string, unknown>>;
   handshakeMs: number;
-}> {
-  const entry = getCliEntryPath();
+}
+
+/** Starts the real server over stdio in `workspace`, sends `requests`, and collects the replies. */
+function mcpLoopback(workspace: string, requests: Array<Record<string, unknown>>): Promise<LoopbackResult> {
+  const wantedIds = requests.map((r) => r.id).filter((id): id is number => typeof id === "number");
   const t0 = performance.now();
 
-  return await new Promise((resolveProbe, rejectProbe) => {
-    const child = spawn(process.execPath, [entry, "serve"], {
-      cwd: os.tmpdir(),
+  return new Promise((resolveProbe, rejectProbe) => {
+    // Run the probe against the sandbox no matter where doctor itself was started from.
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.TURNPACK_ROOT;
+    delete env.CLAUDE_PROJECT_DIR;
+    delete env.TURNPACK_ALLOW_EXEC;
+    const child = spawn(process.execPath, [getCliEntryPath(), "serve"], {
+      cwd: workspace,
+      env,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
 
     let stdout = "";
+    let handshakeMs = 0;
+    let finished = false;
     const responses = new Map<number, Record<string, unknown>>();
     const timer = setTimeout(() => {
+      finished = true;
       child.kill();
-      rejectProbe(new Error("MCP loopback timed out after 5000ms"));
-    }, 5000);
+      rejectProbe(new Error("MCP loopback timed out after 10000ms"));
+    }, 10000);
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -59,77 +74,47 @@ async function probeMcpLoopback(tempDir: string): Promise<{
         const line = stdout.slice(0, idx).trim();
         stdout = stdout.slice(idx + 1);
         if (!line) continue;
+        let parsed: Record<string, unknown>;
         try {
-          const parsed = JSON.parse(line) as Record<string, unknown>;
-          const id = typeof parsed.id === "number" ? parsed.id : -1;
-          if (id >= 0) {
-            responses.set(id, parsed);
-          }
-          if (responses.has(1) && responses.has(2) && responses.has(3)) {
-            clearTimeout(timer);
-            const handshakeMs = Math.round(performance.now() - t0);
-
-            const toolsResp = responses.get(2)?.result as
-              | { tools?: Array<{ name?: string }> }
-              | undefined;
-            const tools = toolsResp?.tools ?? [];
-            const toolsBytes = Buffer.byteLength(JSON.stringify(tools), "utf8");
-            const toolNames = tools.map((t) => String(t.name ?? ""));
-
-            const packResp = responses.get(3)?.result as
-              | { content?: Array<{ text?: string }> }
-              | undefined;
-            const packText = packResp?.content?.[0]?.text ?? "";
-            const packRedacted =
-              packText.includes("REDACTED SECRET FILE") && !packText.includes("SECRET_VAL");
-
-            const payload = {
-              toolsBytes,
-              toolNames,
-              packRedacted,
-              handshakeMs,
-            };
-            child.once("close", () => resolveProbe(payload));
-            child.stdin.end();
-            child.kill();
-          }
+          parsed = JSON.parse(line) as Record<string, unknown>;
         } catch {
-          // Ignore partial line.
+          continue;
+        }
+        if (typeof parsed.id !== "number") continue;
+        responses.set(parsed.id, parsed);
+        if (handshakeMs === 0 && responses.has(1) && responses.has(2)) {
+          handshakeMs = Math.round(performance.now() - t0);
+        }
+        if (!finished && wantedIds.every((id) => responses.has(id))) {
+          finished = true;
+          clearTimeout(timer);
+          child.once("close", () => resolveProbe({ responses, handshakeMs }));
+          child.stdin.end();
+          child.kill();
         }
       }
     });
 
     child.on("error", (err) => {
+      if (finished) return;
+      finished = true;
       clearTimeout(timer);
       rejectProbe(err);
     });
 
-    const req1 = JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "initialize",
-      params: { protocolVersion: "2024-11-05", clientInfo: { name: "claude-code" } },
-    });
-    const req2 = JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" });
-    const req3 = JSON.stringify({
-      jsonrpc: "2.0",
-      id: 3,
-      method: "tools/call",
-      params: { name: "pack", arguments: { root: tempDir, files: [".env"] } },
-    });
-    child.stdin.write(`${req1}\n${req2}\n${req3}\n`);
+    child.stdin.write(`${requests.map((r) => JSON.stringify(r)).join("\n")}\n`);
   });
+}
+
+function toolResult(response: Record<string, unknown> | undefined): { text: string; isError: boolean } {
+  const result = response?.result as { content?: Array<{ text?: string }>; isError?: boolean } | undefined;
+  return { text: result?.content?.[0]?.text ?? "", isError: result?.isError === true };
 }
 
 export async function runDoctor(options: { json?: boolean } = {}): Promise<DoctorReport> {
   const majorNode = Number(process.versions.node.split(".")[0] ?? "0");
-  const nodeOk = majorNode >= 22;
   const checks: DoctorCheck[] = [
-    {
-      name: "Node.js >= 22",
-      ok: nodeOk,
-      detail: `v${process.versions.node}`,
-    },
+    { name: "Node.js >= 22", ok: majorNode >= 22, detail: `v${process.versions.node}` },
   ];
 
   let rgVersion: string | null = null;
@@ -140,39 +125,115 @@ export async function runDoctor(options: { json?: boolean } = {}): Promise<Docto
     rgVersion = null;
   }
   checks.push({
-    name: "ripgrep fast search",
+    name: "ripgrep",
     ok: true,
-    detail: rgVersion ? rgVersion : "not found (using built-in Node search fallback)",
+    warn: rgVersion === null,
+    detail: rgVersion ?? "not found: using the slower built-in search",
   });
 
-  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "turnpack-doc-"));
+  const sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "turnpack-doc-")));
+  const workspace = path.join(sandbox, "workspace");
   let schemaBytes = 0;
   let handshakeMs = 0;
+  let batchIsolation: BatchIsolation | null = null;
 
   try {
-    fs.writeFileSync(path.join(tempDir, ".env"), "TOKEN=SECRET_VAL\n");
-    const probe = await probeMcpLoopback(tempDir);
-    schemaBytes = probe.toolsBytes;
+    fs.mkdirSync(workspace);
+    fs.writeFileSync(path.join(workspace, ".env"), "TOKEN=SECRET_VAL\n");
+    fs.writeFileSync(path.join(workspace, "a.js"), "export function a() { return 1; }\n");
+    fs.writeFileSync(path.join(sandbox, "outside.txt"), "OUTSIDE_VAL\n");
+
+    const call = (id: number, name: string, args: Record<string, unknown>): Record<string, unknown> => ({
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: { name, arguments: args },
+    });
+    const probe = await mcpLoopback(workspace, [
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "turnpack-doctor" } },
+      },
+      { jsonrpc: "2.0", id: 2, method: "tools/list" },
+      call(3, "pack", { files: [".env"] }),
+      call(4, "pack", { root: sandbox, files: ["outside.txt"] }),
+      call(5, "pack", { files: ["../outside.txt"] }),
+    ]);
     handshakeMs = probe.handshakeMs;
 
+    const tools = (probe.responses.get(2)?.result as { tools?: Array<{ name?: string }> } | undefined)?.tools ?? [];
+    const toolNames = tools.map((t) => String(t.name ?? ""));
+    schemaBytes = Buffer.byteLength(JSON.stringify(tools), "utf8");
     const schemaTokens = Math.ceil(schemaBytes / 4);
+
     checks.push({
-      name: "MCP stdio handshake + tools",
-      ok: probe.toolNames.join(",") === "pack,ship,batch",
-      detail: `${probe.toolNames.join(", ")} (${handshakeMs}ms)`,
+      name: "MCP handshake + tools",
+      ok: toolNames.join(",") === "pack,ship,batch",
+      detail: `${toolNames.join(", ")} (${handshakeMs}ms)`,
     });
     checks.push({
-      name: "Compact schema budget (< 1,500 tokens)",
+      name: "Schema budget (< 1,500 tok)",
       ok: schemaTokens < 1500,
       detail: `${schemaBytes} bytes (~${schemaTokens} tokens)`,
     });
+
+    const envRead = toolResult(probe.responses.get(3));
+    const shieldOk = envRead.text.includes("REDACTED SECRET FILE") && !envRead.text.includes("SECRET_VAL");
     checks.push({
-      name: "Default .env secret shield",
-      ok: probe.packRedacted,
-      detail: probe.packRedacted ? "active (blocked .env read)" : "failed",
+      name: "Secret shield",
+      ok: shieldOk,
+      detail: shieldOk ? "active (.env read blocked)" : "FAILED: .env contents were returned",
+    });
+
+    const rootEscape = toolResult(probe.responses.get(4));
+    const pathEscape = toolResult(probe.responses.get(5));
+    const jailOk =
+      rootEscape.isError &&
+      rootEscape.text.includes("ERR_ROOT_OUTSIDE_WORKSPACE") &&
+      pathEscape.text.includes("ERR_PATH_OUTSIDE_WORKSPACE") &&
+      !rootEscape.text.includes("OUTSIDE_VAL") &&
+      !pathEscape.text.includes("OUTSIDE_VAL");
+    checks.push({
+      name: "Workspace jail",
+      ok: jailOk,
+      detail: jailOk ? "holds (root override and ../ refused)" : "FAILED: read a file outside the workspace",
+    });
+
+    try {
+      const marker = path.join(sandbox, "written-by-batch.txt");
+      const batch = await runBatchDetailed({
+        cwd: workspace,
+        code: "let escaped = false; try { ctx.files.constructor('return process')(); escaped = true; } catch (e) {} return { files: ctx.files().length, escaped };",
+      });
+      batchIsolation = batch.isolation;
+      const sealed = batch.text.includes('"escaped": false') && !fs.existsSync(marker);
+      checks.push({
+        name: "batch isolation",
+        ok: sealed,
+        warn: sealed && batch.isolation !== "permission",
+        detail: !sealed
+          ? "FAILED: script reached the host process"
+          : batch.isolation === "permission"
+            ? "own process, no writes, no exec"
+            : "own process only (permission model unavailable)",
+      });
+    } catch (err) {
+      checks.push({
+        name: "batch isolation",
+        ok: false,
+        detail: `runner failed: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`,
+      });
+    }
+  } catch (err) {
+    checks.push({
+      name: "MCP handshake + tools",
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err),
     });
   } finally {
-    fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    fs.rmSync(sandbox, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
   }
 
   const report: DoctorReport = {
@@ -182,20 +243,27 @@ export async function runDoctor(options: { json?: boolean } = {}): Promise<Docto
     schemaBytes,
     estimatedSchemaTokens: Math.ceil(schemaBytes / 4),
     handshakeMs,
+    batchIsolation,
     checks,
   };
 
   if (options.json) {
     process.stdout.write(`${JSON.stringify(report, null, 2)}\n`);
-  } else {
-    process.stdout.write("\nturnpack doctor\n");
-    process.stdout.write("────────────────────────────────────────────────────────────\n");
-    for (const check of report.checks) {
-      const tag = check.ok ? "OK  " : "FAIL";
-      process.stdout.write(`  [${tag}] ${check.name.padEnd(34)} ${check.detail}\n`);
-    }
-    process.stdout.write("────────────────────────────────────────────────────────────\n\n");
+    return report;
   }
 
+  const out: string[] = ["", bold("turnpack doctor"), rule(80)];
+  for (const check of report.checks) {
+    const tag = !check.ok ? red("FAIL") : check.warn ? yellow("warn") : green("ok  ");
+    out.push(`  [${tag}] ${check.name.padEnd(28)} ${check.detail}`);
+  }
+  out.push(rule(80));
+  out.push(
+    report.ok
+      ? `  ${green("All checks passed.")} Next: ${bold("npx turnpack init")}`
+      : `  ${red("Some checks failed.")} Please open an issue and paste this output.`,
+  );
+  out.push("");
+  process.stdout.write(`${out.join("\n")}\n`);
   return report;
 }
