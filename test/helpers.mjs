@@ -108,6 +108,17 @@ export function startSession({ cwd, env = {}, onServerRequest } = {}) {
   };
 }
 
+/** Creates a symlink, or returns false where the platform will not let this user make one. */
+export function trySymlink(target, linkPath, type = "file") {
+  try {
+    fs.symlinkSync(target, linkPath, type);
+    return true;
+  } catch (err) {
+    if (err && (err.code === "EPERM" || err.code === "EACCES")) return false;
+    throw err;
+  }
+}
+
 export function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -13,12 +13,14 @@ First release.
 ### Safety
 
 - **Workspace jail fixed on the server side.** The boundary comes from `TURNPACK_ROOT`, MCP `roots`, `CLAUDE_PROJECT_DIR` or the launch directory, in that order. The `root` / `cwd` tool argument can choose a subdirectory and nothing else.
-- **`batch` runs in its own process** under Node's permission model (no writes, no child processes, no workers, reads limited to the workspace), in a `node:vm` context that receives no host objects, with a minimal environment and a wall-clock limit enforced by the parent.
+- **`batch` runs in its own process** under Node's permission model (no writes, no child processes, no workers, reads limited to the workspace), in a `node:vm` context that receives no host objects, with a minimal environment and a wall-clock limit enforced by the parent. The process does not sit in the workspace directory, so on Windows it never blocks that folder from being renamed or removed.
 - **Secret shield** for `.env*`, keys, registry and cloud credentials, Terraform state and similar files.
 - **Protected paths**: `ship` never writes a `.turnpack.json` or anything inside a `.git` directory, at any depth.
-- **Verify allowlist** (optional, `.turnpack.json`): exact commands or commands with plain arguments; shell operators are refused, an invalid config file blocks verify instead of disabling the list, and the list applies to every subdirectory a call can name as its `cwd`.
+- **Verify allowlist** (optional, `.turnpack.json`): commands must match an entry exactly; an entry ending in ` *` opts in to plain trailing arguments. Shell operators are refused, an invalid config file blocks verify instead of disabling the list, and the list applies to every subdirectory a call can name as its `cwd`.
 - **Rollback on interruption**: SIGINT, SIGTERM and SIGHUP during verify restore the snapshots before the server exits.
 - Search patterns are passed to ripgrep as data, so a query that starts with `-` is searched for rather than parsed as an option.
+- Dangling symlinks are followed before the boundary checks, so a link to a not-yet-existing file cannot carry a write outside the workspace or into `.git`.
+- The built-in regex search and glob matching run in a worker thread with a deadline, so a pattern with catastrophic backtracking costs one call instead of freezing the server.
 - Concurrent `ship` calls are queued. Edits to files that are not valid UTF-8 are refused.
 
 ### MCP server

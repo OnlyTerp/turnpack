@@ -516,6 +516,10 @@ describe("MCP protocol behaviour", () => {
       });
       assert.match(plant.text, /is protected/);
 
+      // An allowed command plus an argument that redirects it is not the allowed command.
+      const redirected = await session.call("ship", { verify: "node ok.mjs --prefix pkg/inner" });
+      assert.match(redirected.text, /not in \.turnpack\.json allowedVerify/);
+
       const allowed = await session.call("ship", { cwd: "pkg/inner", verify: "node ok.mjs" });
       assert.match(allowed.text, /SHIPPED_AND_VERIFIED/);
     } finally {

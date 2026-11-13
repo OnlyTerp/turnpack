@@ -5,7 +5,7 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import { applyClientRoots, createRootPolicy, resolveToolRoot } from "../dist/roots.js";
-import { removeDir } from "./helpers.mjs";
+import { removeDir, trySymlink } from "./helpers.mjs";
 import {
   getShardCacheDir,
   isInsideDir,
@@ -73,6 +73,28 @@ describe("security & confinement", () => {
       () => resolveSafePath(repoDir, "escape-link/new-nested/file.txt"),
       /ERR_PATH_OUTSIDE_WORKSPACE/,
     );
+  });
+
+  it("follows a dangling symlink to where a write would land", () => {
+    // exists() says a dangling link is "not there", which once let it pass for a plain new name.
+    if (!trySymlink(path.join(outsideDir, "not-yet.txt"), path.join(repoDir, "dangling-out.txt"))) return;
+    assert.throws(() => resolveSafePath(repoDir, "dangling-out.txt"), /ERR_PATH_OUTSIDE_WORKSPACE/);
+
+    trySymlink(path.join(outsideDir, "missing-dir"), path.join(repoDir, "dangling-dir"), "dir");
+    assert.throws(() => resolveSafePath(repoDir, "dangling-dir/new/file.txt"), /ERR_PATH_OUTSIDE_WORKSPACE/);
+
+    // A chain of links is followed to its end.
+    trySymlink("dangling-out.txt", path.join(repoDir, "hop.txt"));
+    assert.throws(() => resolveSafePath(repoDir, "hop.txt"), /ERR_PATH_OUTSIDE_WORKSPACE/);
+
+    // A link that stays inside resolves to its target, so checks apply to the real destination.
+    trySymlink(path.join("src", "created-later.ts"), path.join(repoDir, "alias.ts"));
+    assert.equal(resolveSafePath(repoDir, "alias.ts").relPath, "src/created-later.ts");
+
+    // Links that point at each other end in an error, not a hang.
+    trySymlink("loop-b", path.join(repoDir, "loop-a"));
+    trySymlink("loop-a", path.join(repoDir, "loop-b"));
+    assert.throws(() => resolveSafePath(repoDir, "loop-a"), /too many symbolic links/);
   });
 
   it("classifies secret paths accurately while allowing safe examples and .pub keys", () => {

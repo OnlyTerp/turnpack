@@ -10,9 +10,9 @@ import {
 } from "../validate.js";
 import {
   extractSymbols,
-  globToRegExp,
   isBinaryBuffer,
   runGitStatus,
+  runGlobList,
   runSearch,
   sliceLines,
   walkWorkspaceFiles,
@@ -208,16 +208,18 @@ export async function runPack(
 
   if (globs.length > 0) {
     tasks.push(
-      Promise.resolve().then(() => {
-        const walk = walkWorkspaceFiles(workspaceRoot, { allowSecrets });
-        const matchers = globs.map(globToRegExp);
-        const matched = walk.files.filter((rel) => matchers.some((rx) => rx.test(rel)));
+      runGlobList(workspaceRoot, globs, { allowSecrets }).then((listing) => {
+        const matched = listing.matched;
         const lines = matched.slice(0, MAX_GLOB_LINES).map((rel) =>
           !allowSecrets && isSecretPath(rel, workspaceRoot) ? `${rel} [secret-shielded]` : rel,
         );
         const overflow =
           matched.length > MAX_GLOB_LINES ? `\n... (+${matched.length - MAX_GLOB_LINES} more files)` : "";
-        const partial = walk.truncated ? "\n[File walk stopped at its limit; narrow the glob for a complete list]" : "";
+        const partial = listing.note
+          ? `\n[${listing.note}]`
+          : listing.truncated
+            ? "\n[File walk stopped at its limit; narrow the glob for a complete list]"
+            : "";
         return {
           heading: `GLOBS (${matched.length} files)`,
           body: `## GLOBS (${globs.join(", ")}) — ${matched.length} files\n${lines.join("\n") || "(no matches)"}${overflow}${partial}`,

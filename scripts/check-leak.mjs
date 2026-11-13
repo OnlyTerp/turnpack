@@ -198,6 +198,7 @@ try {
       "dist/index.js",
       "dist/index.d.ts",
       "dist/mcp-server.js",
+      "dist/search-worker.js",
       "dist/tools/batch-runner.js",
       "extensions/omp-turnpack.ts",
     ]) {

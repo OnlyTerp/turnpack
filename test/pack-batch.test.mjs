@@ -4,7 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { runBatch, runBatchDetailed, runPack } from "../dist/index.js";
-import { removeDir } from "./helpers.mjs";
+import { runGlobList, runSearch } from "../dist/workspace.js";
+import { removeDir, trySymlink } from "./helpers.mjs";
 
 describe("pack and read-only batch", () => {
   let repoDir;
@@ -144,6 +145,43 @@ describe("pack and read-only batch", () => {
     assert.match(out, /BLOCKED: ERR_PATH_OUTSIDE_WORKSPACE/);
     assert.match(out, /export function add/);
     assert.match(out, /NOT FOUND: does\/not\/exist\.ts/);
+  });
+
+  it("a pattern that would run forever is abandoned at its deadline without freezing the process", async () => {
+    fs.writeFileSync(path.join(repoDir, "src", "long.txt"), `${"a".repeat(64)}b\n`);
+    // ripgrep rejects look-ahead, which sends this to the built-in engine, where the nested
+    // quantifiers backtrack for longer than anyone will wait.
+    const catastrophic = "((a+)+)+c(?=z)";
+
+    let ticks = 0;
+    const heartbeat = setInterval(() => ticks++, 25);
+    const started = Date.now();
+    const res = await runSearch(repoDir, catastrophic, { budgetMs: 500 });
+    clearInterval(heartbeat);
+
+    assert.match(res.note ?? "", /search stopped after 500ms/);
+    assert.equal(res.truncated, true);
+    assert.deepEqual(res.hits, []);
+    assert.equal(Date.now() - started < 4000, true);
+    // The main thread kept running its own timers the whole time.
+    assert.equal(ticks >= 5, true, `event loop ran ${ticks} ticks`);
+
+    // And the next search is unaffected.
+    const after = await runSearch(repoDir, "function (add|multiply)");
+    assert.equal(after.hits.length, 2);
+
+    const globs = await runGlobList(repoDir, ["src/*.ts"]);
+    assert.deepEqual(globs.matched, ["src/math.ts"]);
+  });
+
+  it("lists a symlinked file once, under its real path", async () => {
+    if (!trySymlink("math.ts", path.join(repoDir, "src", "math-alias.ts"))) return;
+    try {
+      const listing = await runGlobList(repoDir, ["src/math*.ts"]);
+      assert.deepEqual(listing.matched, ["src/math.ts"]);
+    } finally {
+      fs.rmSync(path.join(repoDir, "src", "math-alias.ts"), { force: true });
+    }
   });
 
   it("pack falls back to the built-in search and explains an unusable regex", async () => {

@@ -72,24 +72,53 @@ export function resolveWorkspaceRoot(cwd?: string): string {
   return fs.realpathSync(base);
 }
 
-function realpathWithSuffix(targetPath: string): string {
+const MAX_LINK_HOPS = 40;
+
+function lstatOrNull(target: string): fs.Stats | null {
+  try {
+    return fs.lstatSync(target);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolves a path that may not exist yet to the place it would really live.
+ *
+ * The deepest existing part is found with lstat, not exists(): exists() follows links, so it
+ * calls a dangling symlink "not there", and the link would then pass for an ordinary new name.
+ * A write to that name follows the link and lands wherever it points, which may be outside the
+ * workspace or inside .git. So a link whose target is missing is followed here by hand, and the
+ * caller's boundary checks see the destination instead of the link.
+ */
+function realpathWithSuffix(targetPath: string, hops = 0): string {
+  if (hops > MAX_LINK_HOPS) {
+    throw new Error(`ERR_PATH_OUTSIDE_WORKSPACE: too many symbolic links while resolving "${targetPath}"`);
+  }
   let cursor = path.resolve(targetPath);
   const trailing: string[] = [];
 
-  while (!fs.existsSync(cursor)) {
+  let stat = lstatOrNull(cursor);
+  while (!stat) {
     const parent = path.dirname(cursor);
     if (parent === cursor) {
       throw new Error(`ERR_PATH_OUTSIDE_WORKSPACE: Root does not exist for "${targetPath}"`);
     }
     trailing.push(path.basename(cursor));
     cursor = parent;
+    stat = lstatOrNull(cursor);
   }
 
-  const realBase = fs.realpathSync(cursor);
-  if (trailing.length === 0) {
-    return realBase;
+  let realBase: string;
+  try {
+    realBase = fs.realpathSync(cursor);
+  } catch (err) {
+    if (!stat.isSymbolicLink()) throw err;
+    const linkTarget = fs.readlinkSync(cursor);
+    const parentReal = fs.realpathSync(path.dirname(cursor));
+    realBase = realpathWithSuffix(path.resolve(parentReal, linkTarget), hops + 1);
   }
-  return path.resolve(realBase, ...trailing.reverse());
+  return trailing.length === 0 ? realBase : path.resolve(realBase, ...trailing.reverse());
 }
 
 /**

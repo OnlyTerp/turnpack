@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
+import { Worker } from "node:worker_threads";
 import { isSecretPath, resolveSafePath } from "./security.js";
 
 const execFileAsync = promisify(execFile);
@@ -117,6 +118,7 @@ export function walkWorkspaceFiles(
   const secretFiles: string[] = [];
   let truncated = false;
   const visitedDirs = new Set<string>();
+  const seenFiles = new Set<string>();
 
   function visit(dirAbs: string): void {
     if (files.length >= maxFiles) {
@@ -165,6 +167,9 @@ export function walkWorkspaceFiles(
       if (stat.isDirectory()) {
         visit(safe.absPath);
       } else if (stat.isFile()) {
+        // A symlinked file is reported under its real path, which may already be listed.
+        if (seenFiles.has(safe.relPath)) continue;
+        seenFiles.add(safe.relPath);
         if (!allowSecrets && isSecretPath(safe.relPath, workspaceRoot)) {
           secretFiles.push(safe.relPath);
         }
@@ -223,7 +228,7 @@ interface ExecFailure {
 export async function runSearch(
   workspaceRoot: string,
   pattern: string,
-  options: { literal?: boolean; allowSecrets?: boolean; maxMatches?: number } = {},
+  options: { literal?: boolean; allowSecrets?: boolean; maxMatches?: number; budgetMs?: number } = {},
 ): Promise<SearchOutput> {
   const allowSecrets = options.allowSecrets ?? false;
   const maxMatches = Math.min(Math.max(Math.trunc(options.maxMatches ?? 80) || 80, 1), 300);
@@ -285,10 +290,9 @@ export async function runSearch(
     // Anything else (ripgrep missing, timeout): fall through to the built-in search.
   }
 
-  let regex: RegExp | null = null;
   if (!options.literal) {
     try {
-      regex = new RegExp(pattern);
+      new RegExp(pattern);
     } catch (reErr) {
       return {
         hits: [],
@@ -300,6 +304,98 @@ export async function runSearch(
     }
   }
 
+  const budgetMs = options.budgetMs ?? PATTERN_BUDGET_MS;
+  const result = await runPatternJob<SearchOutput>(
+    { op: "search", workspaceRoot, pattern, literal: Boolean(options.literal), allowSecrets, maxMatches },
+    budgetMs,
+    (reason) => ({
+      hits: [],
+      redactedSecretFiles: [],
+      truncated: true,
+      engine: "node",
+      note:
+        reason === "timeout"
+          ? `search stopped after ${budgetMs}ms: this pattern is too expensive for the built-in regex engine; simplify it or pass literal: true`
+          : `built-in search failed (${reason})`,
+    }),
+  );
+  return rgNote && !result.note ? { ...result, note: rgNote } : result;
+}
+
+/**
+ * Patterns come from the model, and the built-in engines (JavaScript RegExp for search, a
+ * regex compiled from each glob for listings) can take exponential time on a hostile or merely
+ * unlucky pattern. Run in the server's own thread, one such call would freeze every other
+ * request. So pattern work runs in a worker thread with a deadline, and is abandoned at it.
+ */
+const PATTERN_BUDGET_MS = 5000;
+
+export type PatternJob =
+  | {
+      op: "search";
+      workspaceRoot: string;
+      pattern: string;
+      literal: boolean;
+      allowSecrets: boolean;
+      maxMatches: number;
+    }
+  | { op: "glob"; workspaceRoot: string; globs: string[]; allowSecrets: boolean };
+
+export interface GlobListing {
+  matched: string[];
+  truncated: boolean;
+  note?: string;
+}
+
+function runPatternJob<T>(job: PatternJob, budgetMs: number, onFailure: (reason: string) => T): Promise<T> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let worker: Worker;
+    const finish = (value: T): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      void worker?.terminate();
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish(onFailure("timeout")), budgetMs);
+    try {
+      worker = new Worker(new URL("./search-worker.js", import.meta.url), { workerData: job });
+    } catch (err) {
+      finish(onFailure(err instanceof Error ? err.message : String(err)));
+      return;
+    }
+    worker.once("message", (value: T) => finish(value));
+    worker.once("error", (err) => finish(onFailure(err.message)));
+    worker.once("exit", () => finish(onFailure("worker exited early")));
+  });
+}
+
+/** Lists workspace files matching any of the globs, within the pattern time budget. */
+export function runGlobList(
+  workspaceRoot: string,
+  globs: string[],
+  options: { allowSecrets?: boolean; budgetMs?: number } = {},
+): Promise<GlobListing> {
+  const budgetMs = options.budgetMs ?? PATTERN_BUDGET_MS;
+  return runPatternJob<GlobListing>(
+    { op: "glob", workspaceRoot, globs, allowSecrets: options.allowSecrets ?? false },
+    budgetMs,
+    (reason) => ({
+      matched: [],
+      truncated: true,
+      note:
+        reason === "timeout"
+          ? `glob listing stopped after ${budgetMs}ms: use fewer wildcards`
+          : `glob listing failed (${reason})`,
+    }),
+  );
+}
+
+/** Worker-side half of runSearch's fallback. Synchronous, and only ever called off the main thread. */
+export function searchWithNodeEngine(job: Extract<PatternJob, { op: "search" }>): SearchOutput {
+  const { workspaceRoot, pattern, literal, allowSecrets, maxMatches } = job;
+  const regex = literal ? null : new RegExp(pattern);
   const { files } = walkWorkspaceFiles(workspaceRoot, { maxFiles: 1500, allowSecrets });
   const hits: SearchHit[] = [];
   const redactedSet = new Set<string>();
@@ -331,12 +427,16 @@ export async function runSearch(
     }
   }
 
+  return { hits, redactedSecretFiles: [...redactedSet], truncated, engine: "node" };
+}
+
+/** Worker-side half of runGlobList. */
+export function listGlobMatches(job: Extract<PatternJob, { op: "glob" }>): GlobListing {
+  const walk = walkWorkspaceFiles(job.workspaceRoot, { allowSecrets: job.allowSecrets });
+  const matchers = job.globs.map(globToRegExp);
   return {
-    hits,
-    redactedSecretFiles: [...redactedSet],
-    truncated,
-    engine: "node",
-    ...(rgNote ? { note: rgNote } : {}),
+    matched: walk.files.filter((rel) => matchers.some((rx) => rx.test(rel))),
+    truncated: walk.truncated,
   };
 }
 

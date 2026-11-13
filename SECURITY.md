@@ -23,7 +23,7 @@ Every read, search, write and delete is confined to the workspace. The workspace
 
 The `root` / `cwd` argument on a tool call may select a directory inside that boundary. It cannot leave it: `"/"`, `".."` and absolute paths elsewhere are refused with `ERR_ROOT_OUTSIDE_WORKSPACE`.
 
-Inside the workspace, each path is resolved through symlinks with `fs.realpathSync` before it is checked, including the existing part of a path that does not exist yet. A symlink in your repo that points outside it cannot be read or written through. Windows drive letters and case-insensitivity are handled.
+Inside the workspace, each path is resolved through symlinks before it is checked, including the existing part of a path that does not exist yet. That covers dangling links too: a symlink whose target does not exist yet is followed to where a write would land, so it cannot be used to create a file outside the workspace or inside `.git`. A symlink in your repo that points outside it cannot be read or written through. Windows drive letters and case-insensitivity are handled.
 
 **Where it stops:** if your app starts the server somewhere broad (your home directory) and supplies none of the above, that directory is the workspace. Set `TURNPACK_ROOT` to be explicit.
 
@@ -73,9 +73,10 @@ The test suite deliberately breaks layer one and checks that layer two still ref
 `ship` writes files and runs commands. That is its purpose, and your AI app should ask you before allowing it. Within that:
 
 - **Validate, then write.** Every edit, write and delete is checked in memory first. A missing anchor, an ambiguous anchor, a path outside the workspace or a secret file aborts the whole call with nothing written.
-- **Protected paths.** `ship` never modifies a `.turnpack.json` or anything inside a `.git` directory, at any depth and whatever the arguments. The first holds the verify allowlist; the second holds hooks and config that run on your next ordinary git command. Nested repositories and submodules are covered too.
+- **Protected paths.** `ship` never modifies a `.turnpack.json` or anything inside a `.git` directory, at any depth, whatever the arguments, and whether the path is named directly or reached through a symlink. The first holds the verify allowlist; the second holds hooks and config that run on your next ordinary git command. Nested repositories and submodules are covered too.
 - **Byte-exact rollback.** Snapshots are taken before the first write and verified by SHA-256 when restored. Files that were created are removed, along with directories created for them. Deleted files come back with their original mode.
 - **Interruptions.** If the server receives SIGINT, SIGTERM or SIGHUP while verify is running, it stops the verify command and restores the snapshots before exiting.
+- **No writing through links.** A write to a symlink lands on the file it resolves to, after that file has passed every check above. The link itself is never replaced, and a path that turns out to be a link at the moment of writing is refused.
 - **Text only.** Search-and-replace edits are refused on files that are not valid UTF-8, so bytes the edit never mentioned cannot be corrupted.
 - **One at a time.** Concurrent `ship` calls are queued.
 
@@ -90,11 +91,11 @@ The test suite deliberately breaks layer one and checks that layer two still ref
 
 A call may name a subdirectory as its `cwd`. Every `.turnpack.json` from that directory up to the workspace root is enforced, so stepping into a subdirectory does not step out from under the list.
 
-A command is accepted if it equals an entry, or is an entry followed by plain arguments. Arguments containing `; & | < > $ ( )`, backticks or newlines are refused, so `npm test && curl … | sh` does not pass as `npm test`. If the file exists but is not valid, verify is refused rather than allowed.
+A command is accepted only if it equals an entry exactly. Extra arguments are refused by default, because arguments change what a command runs: `npm test --prefix other/` and `node --test --import ./x.mjs` are not the commands you approved. To allow trailing arguments for one command, end its entry with ` *` (for example `"pytest *"`). Even then, anything containing `; & | < > $ ( )`, backticks or newlines is refused, so `pytest && curl … | sh` does not pass. If the file exists but is not valid, verify is refused rather than allowed.
 
 **Where it stops:**
 
-- The verify command runs your project's code, and `ship` edits your project's code. The allowlist limits which commands can be launched. It does not limit what your test suite does when it runs.
+- The verify command runs your project's code, and `ship` edits your project's code, including the `test` script in `package.json` or a `Makefile` target, in the same call if it likes. The allowlist stops the agent from launching commands you did not approve, such as a deploy script or `curl … | sh`. It does not stop a hijacked agent from changing what an approved command does. For that you need review, or a sandbox around the whole agent.
 - Snapshots are held in memory. `kill -9`, a crash of the host, or a power cut during verify leaves the edits on disk.
 - Rollback restores files `ship` changed. It does not undo what the verify command did: a migrated database, generated files, a published package.
 - Without the allowlist, `verify` is an arbitrary shell command chosen by the model.
@@ -102,6 +103,7 @@ A command is accepted if it equals an entry, or is an entry followed by plain ar
 ### 5. Everything else
 
 - **Argument handling.** Search patterns are passed to ripgrep as data (`-e pattern -- path`), never as flags.
+- **Runaway patterns.** When ripgrep is missing, or rejects a pattern it does not support (look-around, backreferences), search falls back to JavaScript's regex engine, and glob listings are matched with regexes too. Those can take exponential time on the wrong pattern, so that work runs in a worker thread with a five-second deadline and is abandoned at it. One bad pattern costs one call, not the server.
 - **Overflow files.** Oversized `pack` output is written to a per-user cache directory (`%LOCALAPPDATA%\turnpack\shards`, or `$XDG_CACHE_HOME/turnpack/shards`, or `~/.cache/turnpack/shards`) with `0700`/`0600` permissions, a 24-hour lifetime and a 10 MB cap. Nothing is written into your repo.
 - **The installer.** `turnpack init` previews every change, backs up each file as `*.turnpack.bak`, writes atomically, and skips any config it cannot parse instead of rewriting it.
 - **Supply chain.** No runtime dependencies. The release workflow publishes with [npm provenance](https://docs.npmjs.com/generating-provenance-statements), so a published version can be traced to the commit that built it. The configs `init` writes use `npx -y turnpack serve`, which runs the latest published version each time your app starts; pin a version (`turnpack@0.1.0`) if you would rather update deliberately.

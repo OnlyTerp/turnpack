@@ -162,15 +162,20 @@ function configDirsFor(cwd: string, workspaceRoots: string[]): string[] {
 }
 
 /**
- * A command passes when it is exactly an allowed entry, or an allowed entry followed by plain
- * arguments. "Plain" excludes shell control characters, so `npm test && curl … | sh` does not
- * ride in on the `npm test` prefix.
+ * A command passes when it is exactly an allowed entry.
+ *
+ * Extra arguments are not accepted by default, because arguments change what a command runs
+ * (`npm test --prefix other/`, `node --test --import ./x.mjs`). An entry that ends in " *"
+ * opts in to trailing arguments for that command. Even then shell control characters are
+ * refused, so `npm test && curl … | sh` never rides in on the `npm test` prefix.
  */
 export function isVerifyAllowed(command: string, allowed: string[]): boolean {
   return allowed.some((entry) => {
-    if (command === entry) return true;
-    if (!command.startsWith(`${entry} `)) return false;
-    return !SHELL_CONTROL.test(command.slice(entry.length));
+    if (!entry.endsWith(" *")) return command === entry;
+    const prefix = entry.slice(0, -2).trimEnd();
+    if (!prefix) return false;
+    if (command === prefix) return true;
+    return command.startsWith(`${prefix} `) && !SHELL_CONTROL.test(command.slice(prefix.length));
   });
 }
 
@@ -519,7 +524,7 @@ export async function runShip(
       for (const cmd of verifyList) {
         if (!isVerifyAllowed(cmd, cfg.allowedVerify)) {
           return abort(
-            `verify command "${cmd}" is not in .turnpack.json allowedVerify list (allowed: ${cfg.allowedVerify.join(" | ") || "none"}; an allowed command may take plain arguments but no shell operators)`,
+            `verify command "${cmd}" is not in .turnpack.json allowedVerify list (allowed: ${cfg.allowedVerify.join(" | ") || "none"}; a command must match an entry exactly, unless the entry ends in " *")`,
             t0,
           );
         }
@@ -551,11 +556,16 @@ export async function runShip(
   };
 
   const snapshot = (safe: { absPath: string; relPath: string }): Preimage => {
+    // lstat: the resolved path must be the file itself. If it is still a link here, something
+    // changed between resolving and snapshotting, and writing would follow it somewhere unchecked.
     let stat: fs.Stats | null = null;
     try {
-      stat = fs.statSync(safe.absPath);
+      stat = fs.lstatSync(safe.absPath);
     } catch {
       stat = null;
+    }
+    if (stat?.isSymbolicLink()) {
+      throw new Error(`"${safe.relPath}" resolves to a symbolic link; ship does not write through links`);
     }
     if (stat && !stat.isFile()) {
       throw new Error(`"${safe.relPath}" exists but is not a regular file`);
@@ -719,6 +729,11 @@ export async function runShip(
     const writtenSoFar: PlannedWrite[] = [];
     try {
       for (const plan of plans) {
+        // Checked again at the moment of writing, in case the path was swapped for a link
+        // after it was validated.
+        if (fs.lstatSync(plan.absPath, { throwIfNoEntry: false })?.isSymbolicLink()) {
+          throw new Error(`"${plan.relPath}" became a symbolic link during the call`);
+        }
         if (plan.nextBytes === null) {
           fs.unlinkSync(plan.absPath);
         } else {
