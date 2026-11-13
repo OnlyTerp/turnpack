@@ -14,20 +14,29 @@ What Turnpack does **not** try to be is a sandbox for your whole agent. Your AI 
 
 ### 1. Workspace jail
 
-Every read, search, write and delete is confined to the workspace. The workspace is decided on the server side, from the first of these that is set:
+Every read, search, write and delete is confined to the workspace. The workspace is decided on the server side, from the first of these that applies:
 
 1. `TURNPACK_ROOT`: one directory, or several separated by `:` (`;` on Windows).
-2. MCP `roots`: the folders your app reports for the session. Claude Code reports the project directory and anything added with `--add-dir`.
-3. `CLAUDE_PROJECT_DIR`: set by Claude Code for the servers it starts.
-4. The directory the server process was started in.
+2. MCP `roots`: the folders your app reports for the session. Claude Code and OMP report the project directory.
+3. `CLAUDE_PROJECT_DIR`: set by Claude Code for the servers it starts. It is believed only when the client that connects identifies itself as Claude. Any other app launched from a Claude Code terminal inherits the variable, and for that app it names a different session's project.
+4. The directory the server process was started in, unless that directory is too broad to be a project (see below).
 
-The `root` / `cwd` argument on a tool call may select a directory inside that boundary. It cannot leave it: `"/"`, `".."` and absolute paths elsewhere are refused with `ERR_ROOT_OUTSIDE_WORKSPACE`.
+The `root` argument on a tool call (also accepted as `cwd`) may select a directory inside that boundary. It cannot leave it: `"/"`, `".."` and absolute paths elsewhere are refused with `ERR_ROOT_OUTSIDE_WORKSPACE`. Whatever name a call uses for the directory, the server resolves it once and passes the tools only the answer.
 
 Inside the workspace, each path is resolved through symlinks before it is checked, including the existing part of a path that does not exist yet. That covers dangling links too: a symlink whose target does not exist yet is followed to where a write would land, so it cannot be used to create a file outside the workspace or inside `.git`. A symlink in your repo that points outside it cannot be read or written through. Windows drive letters and case-insensitivity are handled.
 
 Windows also gives a file more than one name. `.env::$DATA` is `.env` (NTFS stream syntax), `.git::$INDEX_ALLOCATION` is the `.git` directory, a name with a trailing dot or space can open the name without it, and `GIT~1` is the 8.3 short name of `.git`. Every fence below compares names, so on Windows all of these spellings are refused with `ERR_PATH_ALIAS` before any file is opened, in file paths and in `root` / `cwd` alike. Short names are detected by asking the file system for the path's real name.
 
-**Where it stops:** if your app starts the server somewhere broad (your home directory) and supplies none of the above, that directory is the workspace. Set `TURNPACK_ROOT` to be explicit.
+**When there is no workspace.** Some desktop apps start their servers in your home directory, at the file system root, or in their own install folder, and name no project. None of those is treated as a workspace: searching and editing a whole home directory is not what anyone asked for. A directory is too broad when it is a file system root, the home directory, an operating system or application folder (`C:\Windows`, `Program Files`, `AppData`, `/usr`, `/Applications`, `~/Library` and the like), or a folder that holds credentials (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.kube`, `~/.docker`, `~/.azure`, `~/.config/gcloud`). Temporary directories are never too broad.
+
+A server started in such a place, with nothing from the list above, has no workspace. Then:
+
+- A call without `root` is refused with `ERR_NO_WORKSPACE` and nothing is read.
+- A call must pass `root` as the absolute path of an existing directory. A too-broad directory is refused with `ERR_ROOT_TOO_BROAD`.
+- The call is confined to the directory it named, with every check described on this page applied inside it.
+- Every `.turnpack.json` from that directory up to the file system root is enforced, so naming a subdirectory is not a way out from under a project's verify allowlist.
+
+**Where it stops:** in that one situation the model's argument chooses which project a call works in. Nothing stops it from naming a different project on the next call. Your app's approval prompt shows the `root` it passed. If you want the boundary fixed, set `TURNPACK_ROOT` (`npx turnpack init --client claude-desktop --root <folder>` writes it for you), and the model's argument can again only narrow it.
 
 ### 2. Secret shield
 
@@ -74,13 +83,15 @@ The test suite deliberately breaks layer one and checks that layer two still ref
 
 `ship` writes files and runs commands. That is its purpose, and your AI app should ask you before allowing it. Within that:
 
-- **Validate, then write.** Every edit, write and delete is checked in memory first. A missing anchor, an ambiguous anchor, a path outside the workspace or a secret file aborts the whole call with nothing written.
+- **Validate, then write.** Every edit, patch hunk, write, move and delete is checked in memory first. A search text that is not found or is ambiguous, a path outside the workspace or a secret file aborts the whole call with nothing written, and the reply lists every problem, not just the first.
+- **Loose matching never guesses.** A search text is tried exactly as written first. Only if it is absent are looser comparisons tried, whole lines at a time: line endings, line numbers copied from a listing, trailing whitespace, indentation, typographic quotes and dashes. A looser comparison is used only when it identifies exactly one place (with `replace_all`, every place it identifies). Two candidate places is an error, never a choice. When a looser match is used the reply says which edit and what was ignored. The same applies to the context lines of a patch, except that a patch is applied top to bottom, so a repeated block is taken at its first occurrence after the previous hunk.
+- **An argument is never silently dropped.** A call carrying an argument `ship` does not know, holding a list, an object or a long string, is refused: applying the rest and reporting success would hide that part of the request went nowhere.
 - **Protected paths.** `ship` never modifies a `.turnpack.json` or anything inside a `.git` directory, at any depth, whatever the arguments, and whether the path is named directly or reached through a symlink. The first holds the verify allowlist; the second holds hooks and config that run on your next ordinary git command. Nested repositories and submodules are covered too.
 - **Byte-exact rollback.** Snapshots are taken before the first write and verified by SHA-256 when restored. Files that were created are removed, along with directories created for them. Deleted files come back with their original mode.
 - **Your changes are not rolled back with it.** Before restoring a file, `ship` checks that it still holds what `ship` wrote. If something else changed it while verify was running (you saved it in your editor), that file is left as it is, the rest are restored, and the reply is `FAILED_ROLLBACK_PARTIAL` with the file named.
 - **Interruptions.** If the server receives SIGINT, SIGTERM or SIGHUP while verify is running, it stops the verify command and restores the snapshots before exiting.
 - **No writing through links.** A write to a symlink lands on the file it resolves to, after that file has passed every check above. The link itself is never replaced, and a path that turns out to be a link at the moment of writing is refused.
-- **Text only.** Search-and-replace edits are refused on files that are not valid UTF-8, so bytes the edit never mentioned cannot be corrupted.
+- **Text only.** Search-and-replace edits and patches are refused on files that are not valid UTF-8, so bytes the edit never mentioned cannot be corrupted. A move carries the file's bytes and permission bits unchanged.
 - **One at a time.** Concurrent `ship` calls are queued.
 - **No waiting on leftovers.** `ship` returns when the verify command itself exits. A background process the command leaves behind (a dev server a test started and never stopped) does not hold the call, or the calls queued behind it, open.
 
@@ -105,14 +116,18 @@ A command is accepted only if it equals an entry exactly. Extra arguments are re
 - `ship` cannot tell your save from a verify command that rewrites the files being shipped (a formatter with `--fix`). Either way those files are left as they are and the reply says which.
 - A process the verify command leaves running is not stopped by `ship`. On a timeout the command and its process tree are killed, but a process that detached itself from that tree survives.
 - Without the allowlist, `verify` is an arbitrary shell command chosen by the model.
+- An app that runs the model's shell commands in a sandbox (Codex does) does not run MCP servers in it. A verify command therefore runs with your normal permissions, outside that sandbox. The app's approval prompt for the `ship` tool is the gate, and the allowlist narrows what can pass through it.
+- To help the model pick the right command, the server reads the project's own files (`package.json` scripts, `Cargo.toml`, `go.mod`, `pytest` config, a `Makefile`, an enforced `.turnpack.json`) and names the check it finds. It only names it. Nothing is run unless a call passes it as `verify`.
 
 ### 5. Everything else
 
 - **Argument handling.** Search patterns are passed to ripgrep as data (`-e pattern -- path`), never as flags.
 - **Runaway patterns.** When ripgrep is missing, or rejects a pattern it does not support (look-around, backreferences), search falls back to JavaScript's regex engine, and glob listings are matched with regexes too. Those can take exponential time on the wrong pattern, so that work runs in a worker thread with a five-second deadline and is abandoned at it. One bad pattern costs one call, not the server.
 - **Overflow files.** Oversized `pack` output is written to a per-user cache directory (`%LOCALAPPDATA%\turnpack\shards`, or `$XDG_CACHE_HOME/turnpack/shards`, or `~/.cache/turnpack/shards`) with `0700`/`0600` permissions, a 24-hour lifetime and a 10 MB cap. Nothing is written into your repo.
-- **The installer.** `turnpack init` previews every change, backs up each file as `*.turnpack.bak`, writes atomically, and skips any config it cannot parse instead of rewriting it.
-- **Supply chain.** No runtime dependencies. The release workflow publishes with [npm provenance](https://docs.npmjs.com/generating-provenance-statements), so a published version can be traced to the commit that built it. The configs `init` writes use `npx -y turnpack serve`, which runs the latest published version each time your app starts; pin a version (`turnpack@0.1.0`) if you would rather update deliberately.
+- **The installer.** `turnpack init` previews every change, backs up each file as `*.turnpack.bak`, writes atomically, keeps what you added to an existing entry, and skips any config it cannot parse instead of rewriting it. It does not change any app's approval settings.
+- **Supply chain.** No runtime dependencies. The release workflow publishes with [npm provenance](https://docs.npmjs.com/generating-provenance-statements), so a published version can be traced to the commit that built it. The entry `init` writes does not go back to the registry: it starts a file already on your machine (a global install, a checkout, or a copy under `~/.turnpack/versions/<version>`), so what your apps run changes only when you run `init` again. With `--npx` it writes `npx -y turnpack@<version> serve`, pinned to the version. A hand-written `npx -y turnpack serve` runs whatever is newest each time your app starts.
+- **The call log.** `TURNPACK_LOG=<file>` is off unless you set it. It records the time, the tool name, the duration, success or failure, the reply size and `ship`'s outcome. It never records arguments, paths or file contents, and nothing is sent anywhere.
+- **Loading tools up front.** Each tool carries `"anthropic/alwaysLoad": true`, which asks Claude Code to show the tools to the model at the start of a session instead of on first use. It changes when about 1,300 tokens of schema enter the context and nothing about what the tools may do. Set `"alwaysLoad": false` on the server entry to opt out.
 
 ## Checking it yourself
 
@@ -120,7 +135,7 @@ A command is accepted only if it equals an entry exactly. Extra arguments are re
 npx turnpack doctor
 ```
 
-runs the real server and checks the secret shield, the workspace jail and the `batch` isolation mode on your machine. The attack tests are in [`test/`](test): sandbox escapes and runaway scripts in `pack-batch.test.mjs`, allowlist smuggling and protected paths in `ship.test.mjs`, jail and root handling in `mcp-cli.test.mjs` and `security.test.mjs`.
+runs the real server and checks the secret shield, the workspace jail and the `batch` isolation mode on your machine, then starts the server from each AI app's own config. The attack tests are in [`test/`](test): sandbox escapes and runaway scripts in `pack-batch.test.mjs`, allowlist smuggling and protected paths in `ship.test.mjs`, jail, root handling and the no-workspace case in `mcp-cli.test.mjs` and `security.test.mjs`, loose matching in `edit-match.test.mjs` and patches in `patch.test.mjs`.
 
 ## Reporting a vulnerability
 

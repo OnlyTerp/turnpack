@@ -55,7 +55,7 @@ Open an issue with the **Harness Adapter** template, or send a pull request that
 npm run build && python3 scripts/render-assets.py
 ```
 
-needs Pillow and ffmpeg. The demo GIF is drawn from the real output of `turnpack demo` and `turnpack doctor`, so regenerate it when either changes.
+needs Pillow and ffmpeg. The demo GIF is drawn from the real output of `turnpack demo` and `turnpack doctor`, so regenerate it when either changes. The measured chart, the numbers in the hero and the headings of the how-it-works diagram are read from `bench/results/`, and `test/docs.test.mjs` fails if the README or an image quotes a number those runs do not show.
 
 `assets/social-preview.png` is the 1280×640 card shown when the repository is linked somewhere. It is a rasterized copy of `assets/social-preview.svg` (open the SVG in a browser and screenshot it at that size); GitHub takes the PNG under Settings → Social preview.
 

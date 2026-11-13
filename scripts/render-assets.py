@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 """Generate adaptive light/dark SVG diagrams and the terminal demo GIF for Turnpack.
 
-The GIF is not hand-written: it runs the built CLI (`node dist/cli.js demo` and `doctor`) and
-draws whatever those commands print, so the picture in the README cannot drift from the tool.
+Nothing here is typed in by hand where it can be read from a source:
+- The GIF runs the built CLI (`node dist/cli.js demo` and `doctor`) and draws what it prints.
+- The measured chart, the hero's numbers and the how-it-works headings come from the recorded
+  benchmark runs in `bench/results/`, so a picture cannot quote a number the runs do not show.
+
 Run `npm run build` first. Needs Pillow and ffmpeg.
 """
+import json
 import os
 import shutil
+import statistics
 import subprocess
 import tempfile
 from pathlib import Path
@@ -65,6 +70,51 @@ PALETTES = {
 FONT_SANS = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
 FONT_MONO = "ui-monospace, SFMono-Regular, Menlo, Consolas, monospace"
 
+VERSION = json.loads((REPO_ROOT / "package.json").read_text(encoding="utf-8"))["version"]
+MEASURED_FILE = REPO_ROOT / "bench" / "results" / "2026-11-13-claude-code.json"
+
+
+def load_measured() -> dict:
+    """The recorded benchmark runs, with the median of each figure per arm."""
+    data = json.loads(MEASURED_FILE.read_text(encoding="utf-8"))
+    arms = {}
+    for arm in ("native", "prompt", "turnpack"):
+        runs = [run for run in data["runs"] if run["arm"] == arm]
+        arms[arm] = {
+            "runs": len(runs),
+            "solved": sum(1 for run in runs if run["solved"]),
+            "seconds": statistics.median(run["seconds"] for run in runs),
+            "roundTrips": statistics.median(run["roundTrips"] for run in runs),
+            "toolCalls": statistics.median(run["toolCalls"] for run in runs),
+            "outputTokens": statistics.median(run["outputTokens"] for run in runs),
+            "costUsd": statistics.median(run["costUsd"] for run in runs),
+        }
+    data["arms"] = arms
+    return data
+
+
+MEASURED = load_measured()
+
+
+def whole(value: float) -> str:
+    return f"{int(round(value)):,}"
+
+
+def less(before: float, after: float) -> str:
+    """How much smaller `after` is than `before`, as a whole percentage with a real minus sign."""
+    return f"−{round((1 - after / before) * 100)}%"
+
+
+def measured_rows() -> list[tuple[str, str, str, float, float]]:
+    """(label, built-in value, Turnpack value, built-in number, Turnpack number) for each figure."""
+    base, tp = MEASURED["arms"]["native"], MEASURED["arms"]["turnpack"]
+    return [
+        ("MODEL ROUND TRIPS", whole(base["roundTrips"]), whole(tp["roundTrips"]), base["roundTrips"], tp["roundTrips"]),
+        ("TIME", f'{base["seconds"]:.1f} s', f'{tp["seconds"]:.1f} s', base["seconds"], tp["seconds"]),
+        ("OUTPUT TOKENS", whole(base["outputTokens"]), whole(tp["outputTokens"]), base["outputTokens"], tp["outputTokens"]),
+        ("COST", f'${base["costUsd"]:.3f}', f'${tp["costUsd"]:.3f}', base["costUsd"], tp["costUsd"]),
+    ]
+
 
 def write_hero_svg(theme: str) -> None:
     p = PALETTES[theme]
@@ -85,6 +135,22 @@ def write_hero_svg(theme: str) -> None:
             f'<text x="{px + w / 2}" y="296" text-anchor="middle" fill="{txt_c}" font-family="{FONT_SANS}" font-size="13" font-weight="600">{label}</text>'
         )
         px += w + 10
+
+    # The three figures people ask about first, straight from the recorded runs.
+    labels = {"MODEL ROUND TRIPS": "Round trips", "TIME": "Time", "COST": "Cost"}
+    stat_svg = []
+    sy = 52
+    for label, before, after, before_n, after_n in measured_rows():
+        if label not in labels:
+            continue
+        stat_svg.append(
+            f'<rect x="22" y="{sy}" width="202" height="52" rx="10" fill="{p["card2"]}" stroke="{p["border"]}" stroke-width="1"/>'
+            f'<text x="36" y="{sy + 21}" fill="{p["body"]}" font-family="{FONT_SANS}" font-size="12.5">{labels[label]}</text>'
+            f'<text x="210" y="{sy + 21}" text-anchor="end" fill="{p["green"]}" font-family="{FONT_MONO}" font-size="12.5" font-weight="700">{less(before_n, after_n)}</text>'
+            f'<text x="36" y="{sy + 42}" font-family="{FONT_MONO}" font-size="15" font-weight="700">'
+            f'<tspan fill="{p["muted"]}">{before}</tspan><tspan fill="{p["muted"]}"> → </tspan><tspan fill="{p["greenText"]}">{after}</tspan></text>'
+        )
+        sy += 62
 
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 370" width="1200" height="370" role="img" aria-label="Turnpack hero banner">
   <defs>
@@ -109,98 +175,147 @@ def write_hero_svg(theme: str) -> None:
   </g>
 
   <text x="144" y="80" fill="{p['title']}" font-family="{FONT_SANS}" font-size="24" font-weight="800" letter-spacing="-0.4">turnpack</text>
-  <text x="144" y="102" fill="{p['green']}" font-family="{FONT_MONO}" font-size="13" font-weight="700">v0.1.0  ·  LOCAL MCP FOR CLAUDE CODE · CODEX · OMP · CURSOR</text>
+  <text x="144" y="102" fill="{p['green']}" font-family="{FONT_MONO}" font-size="13" font-weight="700">v{VERSION}  ·  LOCAL MCP  ·  CLAUDE CODE · CODEX · CHATGPT · OMP · GROK</text>
 
-  <text x="74" y="172" fill="{p['title']}" font-family="{FONT_SANS}" font-size="36" font-weight="800" letter-spacing="-0.8">Stop watching your AI read one file at a time.</text>
-  <text x="74" y="212" fill="{p['body']}" font-family="{FONT_SANS}" font-size="18.5" font-weight="400">Turnpack bundles search &amp; file reading into one clean step — and applies multi-file</text>
-  <text x="74" y="240" fill="{p['body']}" font-family="{FONT_SANS}" font-size="18.5" font-weight="400">edits only if your tests pass. If a test fails, every file rewinds automatically.</text>
+  <text x="74" y="172" fill="{p['title']}" font-family="{FONT_SANS}" font-size="36" font-weight="800" letter-spacing="-0.8">Edits that are tested before they stay.</text>
+  <text x="74" y="212" fill="{p['body']}" font-family="{FONT_SANS}" font-size="18.5" font-weight="400">One call reads what your agent needs. One call edits across files and runs</text>
+  <text x="74" y="240" fill="{p['body']}" font-family="{FONT_SANS}" font-size="18.5" font-weight="400">your tests. If they fail, every file goes back exactly as it was.</text>
 
   {"".join(pill_svg)}
 
-  <!-- Right-side compact summary box -->
+  <!-- Right-side box: the measured run -->
   <g transform="translate(888, 52)">
-    <rect x="0" y="0" width="246" height="256" rx="16" fill="{p['card']}" stroke="{p['border']}" stroke-width="1.2"/>
-    <text x="22" y="34" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">3 FOCUSED TOOLS</text>
-    <rect x="22" y="52" width="202" height="52" rx="10" fill="{p['card2']}" stroke="{p['border']}" stroke-width="1"/>
-    <text x="36" y="74" fill="{p['cyan']}" font-family="{FONT_MONO}" font-size="14" font-weight="700">pack</text>
-    <text x="36" y="93" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">Search + slice + .env shield</text>
-
-    <rect x="22" y="114" width="202" height="52" rx="10" fill="{p['card2']}" stroke="{p['border']}" stroke-width="1"/>
-    <text x="36" y="136" fill="{p['green']}" font-family="{FONT_MONO}" font-size="14" font-weight="700">ship</text>
-    <text x="36" y="155" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">Edit + test + auto rollback</text>
-
-    <rect x="22" y="176" width="202" height="52" rx="10" fill="{p['card2']}" stroke="{p['border']}" stroke-width="1"/>
-    <text x="36" y="198" fill="{p['amber']}" font-family="{FONT_MONO}" font-size="14" font-weight="700">batch</text>
-    <text x="36" y="217" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">Read-only JS repo filter</text>
+    <rect x="0" y="0" width="246" height="266" rx="16" fill="{p['card']}" stroke="{p['green']}" stroke-width="1.2"/>
+    <text x="22" y="34" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">MEASURED, NOT MODELED</text>
+    {"".join(stat_svg)}
+    <text x="123" y="252" text-anchor="middle" fill="{p['muted']}" font-family="{FONT_SANS}" font-size="10.5">{MEASURED['app']} · one task · 3 runs each</text>
   </g>
 </svg>
 """
     (ASSETS_DIR / f"hero-{theme}.svg").write_text(svg, encoding="utf-8")
 
 
-def write_how_it_works_svg(theme: str) -> None:
+def write_measured_svg(theme: str) -> None:
+    """The headline result: the same task with and without Turnpack, drawn from the recorded runs."""
     p = PALETTES[theme]
-    slow_steps = [
-        ("Turn 1", "Search where calculateTax is defined", p["track"], p["body"]),
-        ("Turn 2", "Pause... read tax.ts", p["track"], p["body"]),
-        ("Turn 3", "Pause... read invoice.ts", p["track"], p["body"]),
-        ("Turn 4", "Pause... read checkout.ts", p["track"], p["body"]),
-        ("Turn 5", "Pause... read cart.test.ts", p["track"], p["body"]),
-        ("Turn 6", "Edit tax.ts → save → edit invoice.ts", p["track"], p["body"]),
-        ("Turn 7+", "Run tests → FAIL → messy half-edited files left behind", p["redBg"], p["redText"]),
+    base, tp, asked = MEASURED["arms"]["native"], MEASURED["arms"]["turnpack"], MEASURED["arms"]["prompt"]
+    card_w, gap, left = 266, 16, 44
+    bar_w = card_w - 44
+
+    cards = []
+    x = left
+    for label, before, after, before_n, after_n in measured_rows():
+        after_w = max(10, round(bar_w * after_n / before_n))
+        cards.append(
+            f'<rect x="{x}" y="112" width="{card_w}" height="252" rx="14" fill="{p["card"]}" stroke="{p["border"]}" stroke-width="1.2"/>'
+            f'<text x="{x + 22}" y="144" fill="{p["muted"]}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">{label}</text>'
+            f'<text x="{x + 22}" y="204" fill="{p["green"]}" font-family="{FONT_SANS}" font-size="52" font-weight="800" letter-spacing="-1.5">{less(before_n, after_n)}</text>'
+            # built-in tools
+            f'<text x="{x + 22}" y="246" fill="{p["body"]}" font-family="{FONT_SANS}" font-size="13">Built-in tools</text>'
+            f'<text x="{x + 22 + bar_w}" y="246" text-anchor="end" fill="{p["title"]}" font-family="{FONT_MONO}" font-size="14" font-weight="700">{before}</text>'
+            f'<rect x="{x + 22}" y="255" width="{bar_w}" height="14" rx="4" fill="{p["muted"]}" opacity="0.55"/>'
+            # with Turnpack
+            f'<text x="{x + 22}" y="306" fill="{p["greenText"]}" font-family="{FONT_SANS}" font-size="13" font-weight="600">With Turnpack</text>'
+            f'<text x="{x + 22 + bar_w}" y="306" text-anchor="end" fill="{p["greenText"]}" font-family="{FONT_MONO}" font-size="14" font-weight="700">{after}</text>'
+            f'<rect x="{x + 22}" y="315" width="{bar_w}" height="14" rx="4" fill="{p["track"]}"/>'
+            f'<rect x="{x + 22}" y="315" width="{after_w}" height="14" rx="4" fill="{p["green"]}"/>'
+        )
+        x += card_w + gap
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 470" width="1200" height="470" role="img" aria-label="Measured: the same task with and without Turnpack">
+  <rect width="1200" height="470" rx="20" fill="{p['bg']}" stroke="{p['border']}" stroke-width="1.5"/>
+
+  <text x="44" y="52" fill="{p['title']}" font-family="{FONT_SANS}" font-size="24" font-weight="800">Measured: the same task, with and without Turnpack</text>
+  <text x="44" y="80" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14.5">Rename a function used in five files, then make the tests pass. {MEASURED['app']} {MEASURED['appVersion']} with {MEASURED['model']}, median of {base['runs']} runs each, nothing in the prompt about Turnpack.</text>
+
+  {"".join(cards)}
+
+  <rect x="44" y="384" width="1112" height="56" rx="12" fill="{p['card2']}" stroke="{p['border']}" stroke-width="1"/>
+  <text x="64" y="408" fill="{p['title']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">The built-in tools were already batching: {whole(base['toolCalls'])} tool calls in {whole(base['roundTrips'])} round trips. Turnpack: {whole(tp['toolCalls'])} tool calls in {whole(tp['roundTrips'])}.</text>
+  <text x="64" y="428" fill="{p['body']}" font-family="{FONT_SANS}" font-size="13">Asked to batch harder, they took {whole(asked['roundTrips'])} round trips and {asked['seconds']:.1f} s. The gain is in the steps that depend on each other: search then read, edit then test.</text>
+  <text x="1136" y="418" text-anchor="end" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="12.5" font-weight="700">npm run bench:agents</text>
+</svg>
+"""
+    (ASSETS_DIR / f"measured-{theme}.svg").write_text(svg, encoding="utf-8")
+
+
+def write_how_it_works_svg(theme: str) -> None:
+    """Both columns are the calls of recorded runs, not an illustration.
+
+    Left: runs 2 and 3 of the built-in arm (run 1 searched twice and edited without reading).
+    Right: every Turnpack run was the same two calls.
+    """
+    p = PALETTES[theme]
+    base, tp = MEASURED["arms"]["native"], MEASURED["arms"]["turnpack"]
+    trips = [
+        ("Trip 1", "Search for calculateTax", "1 call"),
+        ("Trip 2", "Read the 5 files it found", "5 calls"),
+        ("Trip 3", "Edit the 5 files, one call per file", "5 calls"),
+        ("Trip 4", "Read package.json to find the test command", "1 call"),
+        ("Trip 5", "Run npm test", "1 call"),
+        ("Trip 6", "Report back", ""),
     ]
 
     left_rows = []
     y = 122
-    for tag, desc, bg_c, fg_c in slow_steps:
-        stroke_c = p["red"] if bg_c == p["redBg"] else p["border"]
+    for tag, desc, count in trips:
         left_rows.append(
-            f'<rect x="64" y="{y}" width="492" height="44" rx="9" fill="{bg_c}" stroke="{stroke_c}" stroke-width="1"/>'
-            f'<text x="82" y="{y + 27}" fill="{p["muted"] if bg_c != p["redBg"] else p["redText"]}" font-family="{FONT_MONO}" font-size="12.5" font-weight="700">{tag}</text>'
-            f'<text x="150" y="{y + 27}" fill="{fg_c}" font-family="{FONT_SANS}" font-size="14" font-weight="600">{desc}</text>'
+            f'<rect x="64" y="{y}" width="492" height="44" rx="9" fill="{p["track"]}" stroke="{p["border"]}" stroke-width="1"/>'
+            f'<text x="82" y="{y + 27}" fill="{p["muted"]}" font-family="{FONT_MONO}" font-size="12.5" font-weight="700">{tag}</text>'
+            f'<text x="150" y="{y + 27}" fill="{p["body"]}" font-family="{FONT_SANS}" font-size="14" font-weight="600">{desc}</text>'
+            f'<text x="538" y="{y + 27}" text-anchor="end" fill="{p["muted"]}" font-family="{FONT_MONO}" font-size="12">{count}</text>'
         )
         y += 53
+    left_rows.append(
+        f'<rect x="64" y="{y}" width="492" height="44" rx="9" fill="{p["redBg"]}" stroke="{p["red"]}" stroke-width="1"/>'
+        f'<text x="82" y="{y + 27}" fill="{p["redText"]}" font-family="{FONT_SANS}" font-size="13.5" font-weight="600">Had the tests failed at trip 5, five files were already changed.</text>'
+    )
 
-    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 525" width="1200" height="525" role="img" aria-label="Without Turnpack vs With Turnpack workflow comparison">
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 525" width="1200" height="525" role="img" aria-label="The same rename task: six round trips with built-in tools, three with Turnpack">
   <rect width="1200" height="525" rx="20" fill="{p['bg']}" stroke="{p['border']}" stroke-width="1.5"/>
 
-  <!-- Left Card: Normal AI Loop -->
+  <!-- Left card: the built-in tools -->
   <rect x="34" y="30" width="552" height="465" rx="16" fill="{p['card']}" stroke="{p['border']}" stroke-width="1.2"/>
-  <rect x="64" y="54" width="142" height="26" rx="13" fill="{p['redBg']}" stroke="{p['red']}" stroke-width="1"/>
-  <text x="135" y="72" text-anchor="middle" fill="{p['redText']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">NORMAL AI LOOP</text>
-  <text x="64" y="106" fill="{p['title']}" font-family="{FONT_SANS}" font-size="21" font-weight="700">Repeated stop-and-go round trips</text>
+  <rect x="64" y="54" width="142" height="26" rx="13" fill="{p['card2']}" stroke="{p['border']}" stroke-width="1"/>
+  <text x="135" y="72" text-anchor="middle" fill="{p['body']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">BUILT-IN TOOLS</text>
+  <text x="64" y="106" fill="{p['title']}" font-family="{FONT_SANS}" font-size="21" font-weight="700">{whole(base['roundTrips'])} round trips · {whole(base['toolCalls'])} tool calls · {base['seconds']:.1f} s</text>
   {"".join(left_rows)}
 
   <!-- Arrow Badge Center -->
   <circle cx="600" cy="262" r="24" fill="{p['green']}" stroke="{p['bg']}" stroke-width="4"/>
   <text x="600" y="269" text-anchor="middle" fill="#FFFFFF" font-family="{FONT_SANS}" font-size="22" font-weight="800">→</text>
 
-  <!-- Right Card: With Turnpack -->
+  <!-- Right card: with Turnpack -->
   <rect x="614" y="30" width="552" height="465" rx="16" fill="{p['card']}" stroke="{p['green']}" stroke-width="1.5"/>
   <rect x="644" y="54" width="166" height="26" rx="13" fill="{p['greenBg']}" stroke="{p['green']}" stroke-width="1"/>
   <text x="727" y="72" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="11.5" font-weight="700">WITH TURNPACK</text>
-  <text x="644" y="106" fill="{p['title']}" font-family="{FONT_SANS}" font-size="21" font-weight="700">Bundle reads, verify edits, or rewind clean</text>
+  <text x="644" y="106" fill="{p['title']}" font-family="{FONT_SANS}" font-size="21" font-weight="700">{whole(tp['roundTrips'])} round trips · {whole(tp['toolCalls'])} tool calls · {tp['seconds']:.1f} s</text>
 
-  <!-- Step 1 -->
-  <rect x="644" y="132" width="492" height="148" rx="14" fill="{p['card2']}" stroke="{p['cyan']}" stroke-width="1.2"/>
-  <rect x="664" y="150" width="118" height="24" rx="6" fill="{p['cyanBg']}"/>
-  <text x="723" y="166" text-anchor="middle" fill="{p['cyan']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">STEP 1 · pack</text>
-  <text x="796" y="167" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">one call, runs locally in milliseconds</text>
-  <text x="664" y="198" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">Gather everything the AI needs in one trip</text>
-  <text x="664" y="224" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Searches patterns + slices exact files &amp; functions together</text>
-  <text x="664" y="246" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Automatically shields .env, .pem &amp; private keys by default</text>
-  <text x="664" y="268" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Caps the reply size; overflow goes to files, not your context</text>
+  <!-- Trip 1 -->
+  <rect x="644" y="122" width="492" height="146" rx="14" fill="{p['card2']}" stroke="{p['cyan']}" stroke-width="1.2"/>
+  <rect x="664" y="138" width="118" height="24" rx="6" fill="{p['cyanBg']}"/>
+  <text x="723" y="154" text-anchor="middle" fill="{p['cyan']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">TRIP 1 · pack</text>
+  <text x="796" y="155" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">does the work of trips 1, 2 and 4</text>
+  <text x="664" y="186" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">The search comes back with the code around each hit</text>
+  <text x="664" y="212" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• One call found all 5 files and showed the lines that matter</text>
+  <text x="664" y="234" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• The server had already named the test command: npm test</text>
+  <text x="664" y="256" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• .env and key files are redacted, and the reply is size-capped</text>
 
-  <!-- Step 2 -->
-  <rect x="644" y="302" width="492" height="168" rx="14" fill="{p['card2']}" stroke="{p['green']}" stroke-width="1.2"/>
-  <rect x="664" y="320" width="118" height="24" rx="6" fill="{p['greenBg']}"/>
-  <text x="723" y="336" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">STEP 2 · ship</text>
-  <text x="796" y="337" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">all-or-nothing</text>
-  <text x="664" y="368" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">Apply multi-file edits + test in one boundary</text>
-  <text x="664" y="394" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Validates every file before writing anything to disk</text>
-  <text x="664" y="416" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Runs your test / typecheck command right after writing</text>
-  <rect x="664" y="428" width="452" height="28" rx="7" fill="{p['greenBg']}"/>
-  <text x="678" y="447" fill="{p['greenText']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">Tests pass → SHIPPED   |   Tests fail → byte-exact auto rollback</text>
+  <!-- Trip 2 -->
+  <rect x="644" y="280" width="492" height="158" rx="14" fill="{p['card2']}" stroke="{p['green']}" stroke-width="1.2"/>
+  <rect x="664" y="296" width="118" height="24" rx="6" fill="{p['greenBg']}"/>
+  <text x="723" y="312" text-anchor="middle" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="12" font-weight="700">TRIP 2 · ship</text>
+  <text x="796" y="313" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12">does the work of trips 3 and 5</text>
+  <text x="664" y="344" fill="{p['title']}" font-family="{FONT_SANS}" font-size="17" font-weight="700">9 edits in 5 files and npm test, in one call</text>
+  <text x="664" y="370" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Every edit is checked before anything is written to disk</text>
+  <text x="664" y="392" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14">• Then the tests run, in the same call</text>
+  <rect x="664" y="402" width="452" height="26" rx="7" fill="{p['greenBg']}"/>
+  <text x="678" y="420" fill="{p['greenText']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">Tests pass → SHIPPED   |   Tests fail → every file put back as it was</text>
+
+  <!-- Trip 3 -->
+  <rect x="644" y="448" width="492" height="34" rx="9" fill="{p['track']}" stroke="{p['border']}" stroke-width="1"/>
+  <text x="662" y="470" fill="{p['muted']}" font-family="{FONT_MONO}" font-size="12.5" font-weight="700">Trip 3</text>
+  <text x="730" y="470" fill="{p['body']}" font-family="{FONT_SANS}" font-size="14" font-weight="600">Report back</text>
 </svg>
 """
     (ASSETS_DIR / f"how-it-works-{theme}.svg").write_text(svg, encoding="utf-8")
@@ -334,7 +449,7 @@ def write_time_saved_svg(theme: str) -> None:
   {"".join(wk_svg)}
 
   <text x="762" y="468" fill="{p['title']}" font-family="{FONT_SANS}" font-size="13.5" font-weight="700">+ Built for Local GPUs &amp; Cloud alike:</text>
-  <text x="762" y="490" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Local GPU: ~1.1k-token tool schema, bounded replies</text>
+  <text x="762" y="490" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Local GPU: ~1.3k-token tool schema, bounded replies</text>
   <text x="762" y="510" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Cloud API: skips cold-cache 100k+ prefill &amp; queues</text>
   <text x="762" y="530" fill="{p['body']}" font-family="{FONT_SANS}" font-size="12.5">• Both: skips 12× token streams &amp; broken half-edits</text>
 
@@ -349,10 +464,16 @@ def write_social_preview_svg() -> None:
     Settings -> Social preview; GitHub does not accept SVG there."""
     p = PALETTES["dark"]
     tools = [
-        ("pack", p["cyan"], "Search + read many files", "in one call"),
+        ("pack", p["cyan"], "Search, with the code", "around every hit"),
         ("ship", p["green"], "Edit, test, and undo", "if the tests fail"),
         ("batch", p["amber"], "One read-only script", "instead of 40 reads"),
     ]
+    base, tp = MEASURED["arms"]["native"], MEASURED["arms"]["turnpack"]
+    social_stat = (
+        f'{whole(base["roundTrips"])} → {whole(tp["roundTrips"])} round trips'
+        f' · {round((1 - tp["seconds"] / base["seconds"]) * 100)}% faster'
+        f' · {round((1 - tp["costUsd"] / base["costUsd"]) * 100)}% cheaper'
+    )
     cards = []
     x = 80
     for name, color, line1, line2 in tools:
@@ -386,15 +507,16 @@ def write_social_preview_svg() -> None:
   </g>
   <text x="164" y="108" fill="{p['title']}" font-family="{FONT_SANS}" font-size="38" font-weight="800" letter-spacing="-0.6">turnpack</text>
 
-  <text x="80" y="218" fill="{p['title']}" font-family="{FONT_SANS}" font-size="58" font-weight="800" letter-spacing="-1.6">Stop watching your AI</text>
-  <text x="80" y="286" fill="{p['title']}" font-family="{FONT_SANS}" font-size="58" font-weight="800" letter-spacing="-1.6">read one file at a time.</text>
-  <text x="80" y="334" fill="{p['body']}" font-family="{FONT_SANS}" font-size="25">A local MCP server that folds an agent's round trips into single calls.</text>
+  <text x="80" y="218" fill="{p['title']}" font-family="{FONT_SANS}" font-size="58" font-weight="800" letter-spacing="-1.6">Edits that are tested</text>
+  <text x="80" y="286" fill="{p['title']}" font-family="{FONT_SANS}" font-size="58" font-weight="800" letter-spacing="-1.6">before they stay.</text>
+  <text x="80" y="334" fill="{p['body']}" font-family="{FONT_SANS}" font-size="25">A local MCP server for AI coding agents. Tests fail? Every file goes back.</text>
 
   {"".join(cards)}
 
   <rect x="80" y="536" width="322" height="50" rx="12" fill="{p['greenBg']}" stroke="{p['green']}" stroke-width="1.2"/>
   <text x="104" y="569" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="22" font-weight="700">npx turnpack demo</text>
-  <text x="1200" y="569" text-anchor="end" fill="{p['muted']}" font-family="{FONT_SANS}" font-size="20" font-weight="600">No API keys · zero dependencies · MIT</text>
+  <text x="1200" y="560" text-anchor="end" fill="{p['title']}" font-family="{FONT_SANS}" font-size="20" font-weight="700">{social_stat}</text>
+  <text x="1200" y="586" text-anchor="end" fill="{p['muted']}" font-family="{FONT_SANS}" font-size="16" font-weight="600">Measured on one task in {MEASURED['app']} · no API keys · zero dependencies</text>
 </svg>
 """
     (ASSETS_DIR / "social-preview.svg").write_text(svg, encoding="utf-8")
@@ -420,8 +542,38 @@ def capture_cli(*args: str) -> list[str]:
     cli = REPO_ROOT / "dist" / "cli.js"
     if not cli.exists():
         raise SystemExit("dist/cli.js not found: run `npm run build` before rendering assets")
-    done = subprocess.run(["node", str(cli), *args], check=True, capture_output=True, text=True, env=env)
+    # The CLI writes UTF-8. Without saying so, Windows decodes it as the system code page and
+    # the box-drawing rules come out as mojibake.
+    done = subprocess.run(["node", str(cli), *args], check=True, capture_output=True, text=True, encoding="utf-8", env=env)
     return [line.rstrip() for line in done.stdout.strip("\n").split("\n")]
+
+
+def capture_doctor() -> list[str]:
+    """`doctor` as a new user sees it right after `init`.
+
+    Run against the maintainer's own machine, doctor would list whichever AI apps happen to be
+    installed there. So the recording uses a temporary home directory in which five apps exist,
+    lets the real `init` configure them, and then runs the real `doctor` on it. Every line is
+    still the CLI's own output.
+    """
+    cli = REPO_ROOT / "dist" / "cli.js"
+    with tempfile.TemporaryDirectory(prefix="turnpack-assets-home-") as home_dir:
+        home = Path(home_dir)
+        if os.name == "nt":
+            desktop = home / "AppData" / "Roaming" / "Claude"
+        elif os.uname().sysname == "Darwin":
+            desktop = home / "Library" / "Application Support" / "Claude"
+        else:
+            desktop = home / ".config" / "Claude"
+        for folder in (home / ".claude", home / ".codex", home / ".omp", home / ".grok", desktop):
+            folder.mkdir(parents=True)
+        subprocess.run(
+            ["node", str(cli), "init", "--yes", "--home", str(home)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        return capture_cli("doctor", "--home", str(home))
 
 
 def line_color(line: str) -> str:
@@ -446,13 +598,15 @@ def line_color(line: str) -> str:
 
 
 def render_demo_gif() -> None:
-    width, height = 960, 600
+    width = 960
     line_height = 27
     f_mono = load_font(16, mono=True)
     f_title = load_font(15, mono=False)
 
     demo_lines = capture_cli("demo")
-    doctor_lines = capture_cli("doctor")
+    doctor_lines = capture_doctor()
+    # Tall enough for the longer of the two outputs, and never shorter than the original frame.
+    height = max(600, 78 + line_height + 6 + line_height * max(len(demo_lines), len(doctor_lines)) + 30)
 
     # Reveal the demo two lines at a time (each tool prints a "did" line and a "->" result line).
     header = 2
@@ -520,6 +674,7 @@ def render_demo_gif() -> None:
 if __name__ == "__main__":
     for th in ("dark", "light"):
         write_hero_svg(th)
+        write_measured_svg(th)
         write_how_it_works_svg(th)
         write_ttft_tax_svg(th)
         write_time_saved_svg(th)

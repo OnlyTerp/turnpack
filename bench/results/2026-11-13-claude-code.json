@@ -1,0 +1,121 @@
+{
+  "date": "2026-11-13",
+  "app": "Claude Code",
+  "appVersion": "2.1.280",
+  "model": "Claude Sonnet 5",
+  "modelId": "claude-sonnet-5",
+  "os": "Windows 11",
+  "task": "Rename the function calculateTax to computeTax everywhere in this project: its definition, every import and every call. Then run the tests and make sure they pass.",
+  "script": "bench/agent-bench.mjs --agents claude --arms native,prompt,turnpack --runs 3",
+  "note": "Model round trips are counted as distinct assistant messages in the stream-json output. Every run was checked by the script, not by the agent.",
+  "runs": [
+    {
+      "arm": "native",
+      "run": 1,
+      "solved": true,
+      "seconds": 22.5,
+      "roundTrips": 6,
+      "toolCalls": 13,
+      "outputTokens": 1958,
+      "costUsd": 0.259366,
+      "turnpackCalls": []
+    },
+    {
+      "arm": "prompt",
+      "run": 1,
+      "solved": true,
+      "seconds": 26.1,
+      "roundTrips": 7,
+      "toolCalls": 14,
+      "outputTokens": 2209,
+      "costUsd": 0.142609,
+      "turnpackCalls": []
+    },
+    {
+      "arm": "turnpack",
+      "run": 1,
+      "solved": true,
+      "seconds": 12.7,
+      "roundTrips": 3,
+      "toolCalls": 2,
+      "outputTokens": 873,
+      "costUsd": 0.084322,
+      "turnpackCalls": [
+        "pack",
+        "ship:SHIPPED_AND_VERIFIED"
+      ]
+    },
+    {
+      "arm": "native",
+      "run": 2,
+      "solved": true,
+      "seconds": 23.4,
+      "roundTrips": 6,
+      "toolCalls": 13,
+      "outputTokens": 2044,
+      "costUsd": 0.130197,
+      "turnpackCalls": []
+    },
+    {
+      "arm": "prompt",
+      "run": 2,
+      "solved": true,
+      "seconds": 23.9,
+      "roundTrips": 5,
+      "toolCalls": 12,
+      "outputTokens": 2063,
+      "costUsd": 0.120529,
+      "turnpackCalls": []
+    },
+    {
+      "arm": "turnpack",
+      "run": 2,
+      "solved": true,
+      "seconds": 12,
+      "roundTrips": 3,
+      "toolCalls": 2,
+      "outputTokens": 856,
+      "costUsd": 0.08424,
+      "turnpackCalls": [
+        "pack",
+        "ship:SHIPPED_AND_VERIFIED"
+      ]
+    },
+    {
+      "arm": "native",
+      "run": 3,
+      "solved": true,
+      "seconds": 24.5,
+      "roundTrips": 6,
+      "toolCalls": 13,
+      "outputTokens": 2082,
+      "costUsd": 0.130749,
+      "turnpackCalls": []
+    },
+    {
+      "arm": "prompt",
+      "run": 3,
+      "solved": true,
+      "seconds": 21.8,
+      "roundTrips": 5,
+      "toolCalls": 13,
+      "outputTokens": 2023,
+      "costUsd": 0.12014,
+      "turnpackCalls": []
+    },
+    {
+      "arm": "turnpack",
+      "run": 3,
+      "solved": true,
+      "seconds": 13.4,
+      "roundTrips": 3,
+      "toolCalls": 2,
+      "outputTokens": 963,
+      "costUsd": 0.085571,
+      "turnpackCalls": [
+        "pack",
+        "ship:SHIPPED_AND_VERIFIED"
+      ]
+    }
+  ]
+}

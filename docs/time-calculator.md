@@ -1,6 +1,8 @@
 # How the time estimates are calculated
 
-Every time figure in this project (`npx turnpack estimate`, the [interactive calculator](calculator.html) and the chart in the README) comes from one formula. It is a model, not a benchmark: it turns assumptions you can see and change into a number.
+The time figures from `npx turnpack estimate`, the [interactive calculator](calculator.html) and the chart in the README come from one formula. It is a model, not a benchmark: it turns assumptions you can see and change into a number. The measured comparison is separate: see "How much does it save?" in the README and [bench/README.md](../bench/README.md).
+
+The number that matters most is `baseline_turns`, and it is easy to set too high. Current apps run independent tool calls in parallel ([baselines.md](baselines.md)), so a task with 13 tool calls can be 6 round trips, as it was in the measured run. Count round trips, not tool calls.
 
 ```text
 seconds_per_turn     = ttft_seconds + (tokens_per_turn / tokens_per_second)
