@@ -106,13 +106,40 @@ describe("security & confinement", () => {
     for (const plain of ["example.env", "docs/config.json", "src/config.ts", "kube/config.md", "environment.ts"]) {
       assert.equal(isSecretPath(plain), false, plain);
     }
+
+    // A caller that names the parent directory as its root must not turn
+    // ".aws/credentials" into an innocent-looking "credentials".
+    assert.equal(isSecretPath("credentials"), false);
+    assert.equal(isSecretPath("credentials", "/home/someone/.aws"), true);
+    assert.equal(isSecretPath("config", "/repo/.git"), true);
+    assert.equal(isSecretPath("config.json", "/home/someone/.docker"), true);
+    assert.equal(isSecretPath("config", "/repo/src"), false);
   });
 
   it("marks the paths ship must never write: its own config and git internals", () => {
-    for (const locked of [".turnpack.json", "./.turnpack.json", ".git", ".git/config", ".git/hooks/pre-commit", ".GIT/hooks/x"]) {
+    for (const locked of [
+      ".turnpack.json",
+      "./.turnpack.json",
+      "src/.turnpack.json",
+      ".git",
+      ".git/config",
+      ".git/hooks/pre-commit",
+      ".GIT/hooks/x",
+      "packages/api/.git/hooks/pre-push",
+      "vendor\\lib\\.git\\config",
+      "/abs/workspace/.git/hooks/pre-commit",
+      "C:\\work\\repo\\.git\\hooks\\pre-commit",
+    ]) {
       assert.equal(isProtectedPath(locked), true, locked);
     }
-    for (const open of [".github/workflows/ci.yml", ".gitignore", "src/.turnpack.json", "git/hooks/x", "docs/turnpack.json"]) {
+    for (const open of [
+      ".github/workflows/ci.yml",
+      ".gitignore",
+      ".gitattributes",
+      "git/hooks/x",
+      "docs/turnpack.json",
+      "src/my.git.notes.md",
+    ]) {
       assert.equal(isProtectedPath(open), false, open);
     }
   });

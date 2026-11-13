@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
+  isInsideDir,
   isProtectedPath,
   isSecretPath,
   resolveSafePath,
@@ -110,11 +111,11 @@ function sha256(buf: Buffer): string {
 }
 
 /**
- * Reads `.turnpack.json`. A file that exists but cannot be understood is an error, not "no
- * config": silently ignoring a broken allowlist would turn the guardrail off.
+ * Reads `.turnpack.json` from one directory. A file that exists but cannot be understood is an
+ * error, not "no config": silently ignoring a broken allowlist would turn the guardrail off.
  */
-function loadProjectConfig(workspaceRoot: string): TurnpackProjectConfig {
-  const cfgPath = path.join(workspaceRoot, ".turnpack.json");
+function loadProjectConfig(configDir: string): TurnpackProjectConfig {
+  const cfgPath = path.join(configDir, ".turnpack.json");
   let text: string;
   try {
     text = fs.readFileSync(cfgPath, "utf8");
@@ -141,6 +142,23 @@ function loadProjectConfig(workspaceRoot: string): TurnpackProjectConfig {
     enforceVerifyAllowlist: parsed.enforceVerifyAllowlist === true,
     allowedVerify: ((allowed as string[] | undefined) ?? []).map((s) => s.trim()).filter(Boolean),
   };
+}
+
+/**
+ * Directories whose `.turnpack.json` governs a call running in `cwd`: `cwd` itself and every
+ * parent up to the server's workspace root. The caller picks `cwd`, so looking only there
+ * would let it step into a subdirectory to get out from under the root's allowlist.
+ */
+function configDirsFor(cwd: string, workspaceRoots: string[]): string[] {
+  const top = workspaceRoots.find((root) => isInsideDir(root, cwd));
+  const dirs = [cwd];
+  if (!top) return dirs;
+  let cursor = cwd;
+  while (cursor !== top && cursor !== path.dirname(cursor)) {
+    cursor = path.dirname(cursor);
+    dirs.push(cursor);
+  }
+  return dirs;
 }
 
 /**
@@ -444,9 +462,18 @@ function applyChange(text: string, change: ShipEditChange, relPath: string): str
 const ROLLBACK_SIGNALS: NodeJS.Signals[] =
   process.platform === "win32" ? ["SIGINT", "SIGTERM", "SIGBREAK"] : ["SIGINT", "SIGTERM", "SIGHUP"];
 
+export interface ShipInternalOptions {
+  restoreOps?: RestoreOps;
+  /**
+   * The server's workspace roots. When given, a `.turnpack.json` anywhere between `cwd` and the
+   * root that contains it is enforced, not just one in `cwd`.
+   */
+  workspaceRoots?: string[];
+}
+
 export async function runShip(
   args: ShipArgs,
-  internalOpts: { restoreOps?: RestoreOps } = {},
+  internalOpts: ShipInternalOptions = {},
 ): Promise<ShipResult> {
   const t0 = performance.now();
   const restoreOps = internalOpts.restoreOps ?? DEFAULT_RESTORE_OPS;
@@ -481,13 +508,14 @@ export async function runShip(
 
   // Phase 1: decide whether the verify commands may run at all, before touching anything.
   if (verifyList.length > 0) {
-    let cfg: TurnpackProjectConfig;
-    try {
-      cfg = loadProjectConfig(workspaceRoot);
-    } catch (err) {
-      return abort(err instanceof Error ? err.message : String(err), t0);
-    }
-    if (cfg.enforceVerifyAllowlist) {
+    for (const configDir of configDirsFor(workspaceRoot, internalOpts.workspaceRoots ?? [])) {
+      let cfg: TurnpackProjectConfig;
+      try {
+        cfg = loadProjectConfig(configDir);
+      } catch (err) {
+        return abort(err instanceof Error ? err.message : String(err), t0);
+      }
+      if (!cfg.enforceVerifyAllowlist) continue;
       for (const cmd of verifyList) {
         if (!isVerifyAllowed(cmd, cfg.allowedVerify)) {
           return abort(
@@ -508,12 +536,13 @@ export async function runShip(
     if (safe.relPath === ".") {
       throw new Error(`${action} target "${target}" is the workspace root, not a file`);
     }
-    if (isProtectedPath(safe.relPath)) {
+    // Checked on the absolute path: the caller picks cwd, and could pick ".git" itself.
+    if (isProtectedPath(safe.absPath)) {
       throw new Error(
-        `"${safe.relPath}" is protected: ship never modifies .turnpack.json or anything inside .git/`,
+        `"${safe.relPath}" is protected: ship never modifies a .turnpack.json or anything inside a .git directory`,
       );
     }
-    if (!allowSecrets && isSecretPath(safe.relPath)) {
+    if (!allowSecrets && isSecretPath(safe.relPath, workspaceRoot)) {
       throw new Error(
         `Secret file ${action} blocked for "${safe.relPath}" (pass allow_secrets: true to override)`,
       );

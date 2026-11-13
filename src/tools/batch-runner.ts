@@ -187,7 +187,7 @@ function execute(msg: RunMessage): void {
     files(args) {
       const glob = args[0];
       const walk = walkWorkspaceFiles(root, { allowSecrets });
-      const visible = allowSecrets ? walk.files : walk.files.filter((rel) => !isSecretPath(rel));
+      const visible = allowSecrets ? walk.files : walk.files.filter((rel) => !isSecretPath(rel, root));
       if (typeof glob !== "string" || !glob.trim()) return visible;
       const rx = globToRegExp(glob.trim());
       return visible.filter((rel) => rx.test(rel));
@@ -196,7 +196,7 @@ function execute(msg: RunMessage): void {
       const [relPath, startLine, endLine] = args;
       if (typeof relPath !== "string") throw new Error("ctx.read(path): path must be a string");
       const safe = resolveSafePath(root, relPath);
-      if (!allowSecrets && isSecretPath(safe.relPath)) {
+      if (!allowSecrets && isSecretPath(safe.relPath, root)) {
         return `[REDACTED SECRET FILE: ${safe.relPath}]`;
       }
       const buf = fs.readFileSync(safe.absPath);
@@ -212,7 +212,7 @@ function execute(msg: RunMessage): void {
       const relPath = args[0];
       if (typeof relPath !== "string") throw new Error("ctx.outline(path): path must be a string");
       const safe = resolveSafePath(root, relPath);
-      if (!allowSecrets && isSecretPath(safe.relPath)) return [];
+      if (!allowSecrets && isSecretPath(safe.relPath, root)) return [];
       const buf = fs.readFileSync(safe.absPath);
       return isBinaryBuffer(buf) ? [] : extractSymbols(buf.toString("utf8"));
     },

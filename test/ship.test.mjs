@@ -181,6 +181,8 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
       { writes: [{ path: ".git/hooks/pre-commit", content: "#!/bin/sh\necho owned\n" }] },
       { edits: [{ path: ".git/config", search: "[core]", replace: "[core]\n\tfsmonitor = evil" }] },
       { writes: [{ path: "sub/../.git/hooks/post-checkout", content: "x" }] },
+      { writes: [{ path: "packages/api/.git/hooks/pre-push", content: "x" }] },
+      { writes: [{ path: "src/.turnpack.json", content: "{}" }] },
     ];
     for (const attempt of attempts) {
       const res = await runShip({ cwd: repoDir, allow_secrets: true, ...attempt });
@@ -188,6 +190,8 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
       assert.match(res.summary, /is protected/);
     }
     assert.deepEqual(fs.readdirSync(path.join(repoDir, ".git", "hooks")), []);
+    assert.equal(fs.existsSync(path.join(repoDir, "packages")), false);
+    assert.equal(fs.existsSync(path.join(repoDir, "src")), false);
     assert.match(fs.readFileSync(path.join(repoDir, ".turnpack.json"), "utf8"), /"enforceVerifyAllowlist": true/);
   });
 
