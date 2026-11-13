@@ -5,25 +5,33 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
+    name: ${{ matrix.os }} / Node ${{ matrix.node-version }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
         node-version: [22, 24]
-        exclude:
-          - os: windows-latest
-            node-version: 24
-          - os: macos-latest
-            node-version: 24
 
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          # Full history so the leak gate can inspect commit identities.
+          fetch-depth: 0
 
       - name: Setup Node.js ${{ matrix.node-version }}
         uses: actions/setup-node@v4
@@ -44,3 +52,28 @@ jobs:
 
       - name: Run leak & clean-tarball gate
         run: npm run check:leak
+
+  # The published package must work for someone who has never seen this repository:
+  # install the tarball into an empty project and run the CLI from there.
+  packed-install:
+    name: Install from tarball
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Pack and install into a clean project
+        shell: bash
+        run: |
+          TARBALL="$PWD/$(npm pack --silent | tail -n 1)"
+          mkdir "$RUNNER_TEMP/consumer"
+          cd "$RUNNER_TEMP/consumer"
+          npm init -y > /dev/null
+          npm install "$TARBALL"
+          npx turnpack --version
+          npx turnpack demo
+          npx turnpack doctor

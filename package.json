@@ -1,7 +1,7 @@
 {
   "name": "turnpack",
   "version": "0.1.0",
-  "description": "Fewer back-and-forth AI turns. Local MCP context pack + test-gated multi-file ship with automatic rollback.",
+  "description": "Fewer back-and-forth AI turns. A local MCP server that gathers context in one call and ships multi-file edits behind your tests, with automatic byte-exact rollback.",
   "license": "MIT",
   "author": "OnlyTerp (https://github.com/OnlyTerp)",
   "repository": {
@@ -15,11 +15,15 @@
   "keywords": [
     "mcp",
     "mcp-server",
+    "model-context-protocol",
     "ai-agents",
+    "ai-coding",
     "claude-code",
     "codex",
     "cursor",
+    "gemini-cli",
     "context-packing",
+    "rollback",
     "developer-tools",
     "typescript"
   ],
@@ -27,6 +31,8 @@
   "bin": {
     "turnpack": "./dist/cli.js"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -38,6 +44,7 @@
     "extensions",
     "README.md",
     "SECURITY.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "engines": {
@@ -50,10 +57,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build",
     "test": "npm run build && node --test test/*.test.mjs",
     "demo": "node dist/cli.js demo",
     "doctor": "node dist/cli.js doctor",
+    "bench": "node bench/run-local-bench.mjs",
     "check:leak": "node scripts/check-leak.mjs",
-    "verify": "npm test && npm run check:leak"
+    "verify": "npm test && npm run check:leak",
+    "prepublishOnly": "npm run verify"
   }
 }
