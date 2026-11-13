@@ -9,6 +9,7 @@ import {
   resolveSafePath,
   resolveWorkspaceRoot,
 } from "../security.js";
+import { describeChecks, detectChecks } from "../checks.js";
 import {
   isRecord,
   optionalBoolean,
@@ -16,8 +17,15 @@ import {
   optionalNumber,
   optionalString,
   optionalStringList,
+  pick,
   requiredString,
+  ROOT_KEYS,
+  unknownWorkKeys,
+  unwrapJson,
 } from "../validate.js";
+import { suggestPaths } from "../workspace.js";
+import { applySearchReplace, HOW_LABEL } from "./edit-match.js";
+import { applyHunks, parsePatch, type PatchFile } from "./patch.js";
 
 export interface ShipWriteOp {
   path: string;
@@ -41,11 +49,19 @@ export interface ShipEditOp {
   changes?: ShipEditChange[];
 }
 
+export interface ShipMoveOp {
+  from: string;
+  to: string;
+}
+
 export interface ShipArgs {
   cwd?: string;
   writes?: ShipWriteOp[];
   edits?: ShipEditOp[];
+  moves?: ShipMoveOp[];
   deletes?: string[];
+  /** The same kinds of change as a patch: apply_patch format or a unified diff. */
+  patch?: string;
   verify?: string | string[];
   timeout_ms?: number;
   rollback_on_fail?: boolean;
@@ -91,6 +107,11 @@ interface PlannedWrite {
   /** `null` means the file is deleted. */
   nextBytes: Buffer | null;
   preimage: Preimage;
+  /** Permission bits for a file this call creates by moving another one. */
+  mode?: number;
+  /** Set on the new path of a moved file, and on the old one. */
+  movedFrom?: string;
+  movedTo?: string;
 }
 
 interface TurnpackProjectConfig {
@@ -185,22 +206,6 @@ export function isVerifyAllowed(command: string, allowed: string[]): boolean {
   });
 }
 
-function countOccurrences(haystack: string, needle: string): number {
-  if (!needle) return 0;
-  let count = 0;
-  let from = 0;
-  for (;;) {
-    const at = haystack.indexOf(needle, from);
-    if (at === -1) return count;
-    count += 1;
-    from = at + needle.length;
-  }
-}
-
-/** Literal replacement: no regex, and no `$&`-style expansion of the replacement text. */
-function replaceLiteral(haystack: string, needle: string, replacement: string): string {
-  return haystack.split(needle).join(replacement);
-}
 
 /** Collects the first and last parts of a stream; test failures are reported at the end. */
 class BoundedOutput {
@@ -462,62 +467,66 @@ function abort(message: string, t0: number): ShipResult {
   };
 }
 
+// Argument names, documented one first. Models reach for the names of the edit tools they were
+// trained on (`old_string`, `file_path`, `oldText`); reading those costs nothing, and refusing
+// them costs a turn.
+const PATH_KEYS = ["path", "file_path", "file", "filename", "filepath"] as const;
+const SEARCH_KEYS = ["search", "old_string", "old_str", "oldText", "old_text", "old", "find"] as const;
+const REPLACE_KEYS = ["replace", "new_string", "new_str", "newText", "new_text", "new", "replacement"] as const;
+const REPLACE_ALL_KEYS = ["replace_all", "replaceAll", "all"] as const;
+const CONTENT_KEYS = ["content", "contents", "text", "new_content"] as const;
+const FROM_KEYS = ["from", "source", "src", "old_path", "path"] as const;
+const TO_KEYS = ["to", "destination", "dest", "new_path"] as const;
+
+const EDITS_KEYS = ["edits", "edit"] as const;
+const WRITES_KEYS = ["writes", "write"] as const;
+const MOVES_KEYS = ["moves", "move", "renames", "rename"] as const;
+const DELETES_KEYS = ["deletes", "delete", "remove"] as const;
+const VERIFY_KEYS = ["verify", "verify_command", "verify_commands"] as const;
+const PATCH_KEYS = ["patch", "diff"] as const;
+const KNOWN_SHIP_KEYS: readonly string[] = [
+  ...ROOT_KEYS,
+  ...EDITS_KEYS,
+  ...WRITES_KEYS,
+  ...MOVES_KEYS,
+  ...DELETES_KEYS,
+  ...VERIFY_KEYS,
+  ...PATCH_KEYS,
+  "timeout_ms",
+  "rollback_on_fail",
+  "rollback_on_verify_fail",
+  "allow_secrets",
+];
+
 function parseChange(value: unknown, label: string): ShipEditChange {
   if (!isRecord(value)) {
     throw new Error(`${label} must be an object with search and replace`);
   }
-  if (typeof value.search !== "string" || typeof value.replace !== "string") {
-    throw new Error(`${label} requires string search and replace`);
+  const search = pick(value, SEARCH_KEYS);
+  const replace = pick(value, REPLACE_KEYS);
+  if (typeof search !== "string" || typeof replace !== "string") {
+    throw new Error(
+      `${label} needs a search string and a replace string` +
+        (typeof pick(value, CONTENT_KEYS) === "string" ? " (to replace a whole file, put it in writes)" : ""),
+    );
   }
   return {
-    search: value.search,
-    replace: value.replace,
-    replace_all: optionalBoolean(value.replace_all, `${label}.replace_all`),
+    search,
+    replace,
+    replace_all: optionalBoolean(pick(value, REPLACE_ALL_KEYS), `${label}.replace_all`),
   };
 }
 
-/**
- * Applies one search/replace to `text`. The anchor must match exactly once unless replace_all
- * is set. If it does not match as written and the only difference is line endings (the model
- * wrote "\n", the file uses "\r\n", or the reverse), the anchor is retried with the file's own
- * line endings so edits to CRLF files do not fail on an invisible character.
- */
-function applyChange(text: string, change: ShipEditChange, relPath: string): string {
-  if (!change.search) {
-    throw new Error(`Empty search anchor in edit for "${relPath}"`);
-  }
-  let search = change.search;
-  let replace = change.replace;
-  let count = countOccurrences(text, search);
 
-  if (count === 0 && search.includes("\n")) {
-    const fileUsesCrlf = text.includes("\r\n");
-    const toFileEol = (s: string): string => {
-      const lf = s.replace(/\r\n/g, "\n");
-      return fileUsesCrlf ? lf.replace(/\n/g, "\r\n") : lf;
-    };
-    const altSearch = toFileEol(search);
-    if (altSearch !== search) {
-      const altCount = countOccurrences(text, altSearch);
-      if (altCount > 0) {
-        search = altSearch;
-        replace = toFileEol(replace);
-        count = altCount;
-      }
-    }
+/** True when two paths are one file, as on a case-insensitive file system. */
+function sameFile(a: string, b: string): boolean {
+  try {
+    const left = fs.statSync(a);
+    const right = fs.statSync(b);
+    return left.ino !== 0 && left.ino === right.ino && left.dev === right.dev;
+  } catch {
+    return false;
   }
-
-  if (count === 0) {
-    throw new Error(
-      `Anchor not found in "${relPath}": ${JSON.stringify(change.search.slice(0, 80))} (search must match the file exactly, including whitespace)`,
-    );
-  }
-  if (count > 1 && !change.replace_all) {
-    throw new Error(
-      `Ambiguous anchor in "${relPath}" matched ${count} times (pass replace_all: true or add surrounding context)`,
-    );
-  }
-  return replaceLiteral(text, search, replace);
 }
 
 const ROLLBACK_SIGNALS: NodeJS.Signals[] =
@@ -530,6 +539,8 @@ export interface ShipInternalOptions {
    * root that contains it is enforced, not just one in `cwd`.
    */
   workspaceRoots?: string[];
+  /** Told what ship is doing while it waits on a verify command. */
+  onProgress?: (message: string) => void;
 }
 
 export async function runShip(
@@ -547,9 +558,20 @@ export async function runShip(
   let verifyList: string[];
   let writeOps: unknown[];
   let editOps: unknown[];
-  let deleteOps: string[];
+  let moveOps: unknown[];
+  let deleteOps: unknown[];
+  let patchText: string | undefined;
   try {
-    workspaceRoot = resolveWorkspaceRoot(optionalString(raw.cwd, "ship.cwd"));
+    // An argument ship does not know, carrying a list or a long string, is part of the change
+    // the model asked for. Ignoring it would ship the rest and report success.
+    const stray = unknownWorkKeys(raw, KNOWN_SHIP_KEYS);
+    if (stray.length > 0) {
+      throw new Error(
+        `unknown argument${stray.length > 1 ? "s" : ""} ${stray.map((key) => `"${key}"`).join(", ")}. ` +
+          "ship takes edits [{path, search, replace}] or a patch, writes [{path, content}], moves [{from, to}], deletes [path] and verify [command]. Nothing was written.",
+      );
+    }
+    workspaceRoot = resolveWorkspaceRoot(optionalString(pick(raw, ROOT_KEYS), "ship.root"));
     allowSecrets = optionalBoolean(raw.allow_secrets, "ship.allow_secrets") ?? false;
     shouldRollback =
       optionalBoolean(raw.rollback_on_fail, "ship.rollback_on_fail") ??
@@ -559,10 +581,14 @@ export async function runShip(
       300000,
       Math.max(1000, Math.trunc(optionalNumber(raw.timeout_ms, "ship.timeout_ms") ?? 60000)),
     );
-    verifyList = optionalStringList(raw.verify, "ship.verify").map((s) => s.trim()).filter(Boolean);
-    writeOps = optionalList(raw.writes, "ship.writes");
-    editOps = optionalList(raw.edits, "ship.edits");
-    deleteOps = optionalStringList(raw.deletes, "ship.deletes");
+    verifyList = optionalStringList(unwrapJson(pick(raw, VERIFY_KEYS)), "ship.verify")
+      .map((s) => s.trim())
+      .filter(Boolean);
+    writeOps = optionalList(unwrapJson(pick(raw, WRITES_KEYS)), "ship.writes");
+    editOps = optionalList(unwrapJson(pick(raw, EDITS_KEYS)), "ship.edits");
+    moveOps = optionalList(unwrapJson(pick(raw, MOVES_KEYS)), "ship.moves");
+    deleteOps = optionalList(unwrapJson(pick(raw, DELETES_KEYS)), "ship.deletes");
+    patchText = optionalString(pick(raw, PATCH_KEYS), "ship.patch");
   } catch (err) {
     return abort(err instanceof Error ? err.message : String(err), t0);
   }
@@ -589,8 +615,18 @@ export async function runShip(
   }
 
   // Phase 2: validate every operation in memory and snapshot preimages. Nothing is written yet,
-  // so any problem here leaves the workspace exactly as it was.
+  // so any problem here leaves the workspace exactly as it was. Every operation is checked even
+  // after one fails, so a single reply lists everything that needs fixing.
   const plansByRel = new Map<string, PlannedWrite>();
+  const problems: string[] = [];
+  const lenient: string[] = [];
+  const attempt = (run: () => void): void => {
+    try {
+      run();
+    } catch (err) {
+      problems.push(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const guardPath = (target: string, action: string): { absPath: string; relPath: string } => {
     const safe = resolveSafePath(workspaceRoot, target);
@@ -637,46 +673,173 @@ export async function runShip(
     };
   };
 
-  try {
-    writeOps.forEach((item, idx) => {
-      if (!isRecord(item)) throw new Error(`ship.writes[${idx}] must be an object`);
-      const target = requiredString(item.path, `ship.writes[${idx}].path`);
-      if (typeof item.content !== "string") {
+  const notFound = (what: string, relPath: string): Error =>
+    new Error(`${what} not found: "${relPath}".${suggestPaths(workspaceRoot, relPath)}`);
+
+  // Moves come first, so the same call can go on to edit a file under its new name.
+  moveOps.forEach((item, idx) =>
+    attempt(() => {
+      if (!isRecord(item)) throw new Error(`ship.moves[${idx}] must be an object with from and to`);
+      const source = guardPath(requiredString(pick(item, FROM_KEYS), `ship.moves[${idx}].from`), "move");
+      const target = guardPath(requiredString(pick(item, TO_KEYS), `ship.moves[${idx}].to`), "move");
+      if (plansByRel.has(source.relPath) || plansByRel.has(target.relPath)) {
+        throw new Error(`"${source.relPath}" or "${target.relPath}" is moved twice in the same call`);
+      }
+      const sourceImage = snapshot(source);
+      if (!sourceImage.existed) throw notFound("Move source", source.relPath);
+      const targetImage = snapshot(target);
+      if (targetImage.existed) {
+        throw new Error(
+          sameFile(source.absPath, target.absPath)
+            ? `"${source.relPath}" and "${target.relPath}" are one file on this file system; ship does not do renames that change only the letter case`
+            : `Move target already exists: "${target.relPath}"`,
+        );
+      }
+      plansByRel.set(source.relPath, { ...source, nextBytes: null, preimage: sourceImage, movedTo: target.relPath });
+      plansByRel.set(target.relPath, {
+        ...target,
+        nextBytes: sourceImage.bytes,
+        preimage: targetImage,
+        mode: sourceImage.mode,
+        movedFrom: source.relPath,
+      });
+    }),
+  );
+
+  // A patch is the same kinds of change in another notation, so it goes through the same plan:
+  // checked in full before anything is written, tested, and undone if the test fails.
+  if (patchText?.trim()) {
+    let patchFiles: PatchFile[] = [];
+    attempt(() => {
+      patchFiles = parsePatch(patchText as string);
+    });
+    for (const entry of patchFiles) {
+      attempt(() => {
+        if (entry.kind === "add") {
+          const safe = guardPath(entry.path, "write");
+          const earlier = plansByRel.get(safe.relPath);
+          if (earlier?.movedTo) {
+            throw new Error(`"${safe.relPath}" is moved to "${earlier.movedTo}" by this call; write to the new path`);
+          }
+          plansByRel.set(safe.relPath, {
+            ...safe,
+            nextBytes: Buffer.from(entry.content ?? "", "utf8"),
+            preimage: earlier?.preimage ?? snapshot(safe),
+            mode: earlier?.mode,
+            movedFrom: earlier?.movedFrom,
+          });
+          return;
+        }
+        if (entry.kind === "delete") {
+          const safe = guardPath(entry.path, "delete");
+          if (plansByRel.has(safe.relPath)) {
+            throw new Error(`"${safe.relPath}" is both written/edited and deleted in the same call`);
+          }
+          const preimage = snapshot(safe);
+          if (!preimage.existed) throw notFound("Delete target", safe.relPath);
+          plansByRel.set(safe.relPath, { ...safe, nextBytes: null, preimage });
+          return;
+        }
+
+        const safe = guardPath(entry.path, "edit");
+        const earlier = plansByRel.get(safe.relPath);
+        if (earlier?.movedTo) {
+          throw new Error(`"${safe.relPath}" is moved to "${earlier.movedTo}" by this call; patch it under its new path`);
+        }
+        if (earlier && earlier.nextBytes === null) {
+          throw new Error(`"${safe.relPath}" is both edited and deleted in the same call`);
+        }
+        const preimage = earlier?.preimage ?? snapshot(safe);
+        if (!earlier && !preimage.existed) throw notFound("Patch target", safe.relPath);
+        const bytes = earlier?.nextBytes ?? preimage.bytes;
+        const text = bytes.toString("utf8");
+        if (!Buffer.from(text, "utf8").equals(bytes)) {
+          throw new Error(`"${safe.relPath}" is not valid UTF-8 text, so it cannot be patched (use writes to replace the whole file)`);
+        }
+        const applied = applyHunks(text, entry.hunks);
+        if (!applied.ok) throw new Error(`${safe.relPath} (patch): ${applied.message}`);
+        for (const note of applied.notes) lenient.push(`${safe.relPath} (patch): ${note}`);
+        const nextBytes = Buffer.from(applied.text, "utf8");
+
+        const target = entry.moveTo ? guardPath(entry.moveTo, "move") : safe;
+        if (target.relPath === safe.relPath) {
+          plansByRel.set(safe.relPath, { ...safe, nextBytes, preimage, mode: earlier?.mode, movedFrom: earlier?.movedFrom });
+          return;
+        }
+        if (plansByRel.has(target.relPath)) {
+          throw new Error(`"${target.relPath}" is already changed by this call`);
+        }
+        const targetImage = snapshot(target);
+        if (targetImage.existed) {
+          throw new Error(
+            sameFile(safe.absPath, target.absPath)
+              ? `"${safe.relPath}" and "${target.relPath}" are one file on this file system; ship does not do renames that change only the letter case`
+              : `Move target already exists: "${target.relPath}"`,
+          );
+        }
+        plansByRel.set(safe.relPath, { ...safe, nextBytes: null, preimage, movedTo: target.relPath });
+        plansByRel.set(target.relPath, {
+          ...target,
+          nextBytes,
+          preimage: targetImage,
+          mode: preimage.mode,
+          movedFrom: safe.relPath,
+        });
+      });
+    }
+  }
+
+  writeOps.forEach((item, idx) =>
+    attempt(() => {
+      if (!isRecord(item)) throw new Error(`ship.writes[${idx}] must be an object with path and content`);
+      const target = requiredString(pick(item, PATH_KEYS), `ship.writes[${idx}].path`);
+      const content = pick(item, CONTENT_KEYS);
+      if (typeof content !== "string") {
         throw new Error(`ship.writes[${idx}].content must be a string`);
       }
       const expectedSha = optionalString(item.expected_sha256, `ship.writes[${idx}].expected_sha256`);
       const safe = guardPath(target, "write");
-      const preimage = plansByRel.get(safe.relPath)?.preimage ?? snapshot(safe);
+      const earlier = plansByRel.get(safe.relPath);
+      if (earlier?.movedTo) {
+        throw new Error(`"${safe.relPath}" is moved to "${earlier.movedTo}" by this call; write to the new path`);
+      }
+      const preimage = earlier?.preimage ?? snapshot(safe);
       if (expectedSha && preimage.existed && preimage.sha256 !== expectedSha.toLowerCase()) {
         throw new Error(`Precondition failed for "${safe.relPath}": SHA-256 changed on disk`);
       }
       plansByRel.set(safe.relPath, {
-        relPath: safe.relPath,
-        absPath: safe.absPath,
-        nextBytes: Buffer.from(item.content, "utf8"),
+        ...safe,
+        nextBytes: Buffer.from(content, "utf8"),
         preimage,
+        mode: earlier?.mode,
+        movedFrom: earlier?.movedFrom,
       });
-    });
+    }),
+  );
 
-    editOps.forEach((item, idx) => {
-      if (!isRecord(item)) throw new Error(`ship.edits[${idx}] must be an object`);
-      const target = requiredString(item.path, `ship.edits[${idx}].path`);
+  editOps.forEach((item, idx) =>
+    attempt(() => {
+      if (!isRecord(item)) throw new Error(`ship.edits[${idx}] must be an object with path, search and replace`);
+      const target = requiredString(pick(item, PATH_KEYS), `ship.edits[${idx}].path`);
       const safe = guardPath(target, "edit");
-      const existingPlan = plansByRel.get(safe.relPath);
+      const earlier = plansByRel.get(safe.relPath);
 
       let preimage: Preimage;
-      let workingText: string;
-      if (existingPlan) {
-        if (existingPlan.nextBytes === null) {
+      let workingBytes: Buffer;
+      if (earlier) {
+        if (earlier.movedTo) {
+          throw new Error(
+            `"${safe.relPath}" is moved to "${earlier.movedTo}" by this call; edit it under its new path`,
+          );
+        }
+        if (earlier.nextBytes === null) {
           throw new Error(`"${safe.relPath}" is both edited and deleted in the same call`);
         }
-        preimage = existingPlan.preimage;
-        workingText = existingPlan.nextBytes.toString("utf8");
+        preimage = earlier.preimage;
+        workingBytes = earlier.nextBytes;
       } else {
         preimage = snapshot(safe);
-        if (!preimage.existed) {
-          throw new Error(`Edit target not found: "${safe.relPath}"`);
-        }
+        if (!preimage.existed) throw notFound("Edit target", safe.relPath);
         const expectedSha = optionalString(item.expected_sha256, `ship.edits[${idx}].expected_sha256`);
         if (expectedSha && preimage.sha256 !== expectedSha.toLowerCase()) {
           throw new Error(`Precondition failed for "${safe.relPath}": SHA-256 changed on disk`);
@@ -688,71 +851,111 @@ export async function runShip(
         ) {
           throw new Error(`Precondition failed for "${safe.relPath}": mtime changed on disk`);
         }
-        workingText = preimage.bytes.toString("utf8");
-        // Search/replace goes through a string. A file that is not valid UTF-8 would not survive
-        // that round trip intact, so refuse rather than corrupt bytes the edit never mentioned.
-        if (!Buffer.from(workingText, "utf8").equals(preimage.bytes)) {
-          throw new Error(
-            `"${safe.relPath}" is not valid UTF-8 text, so search/replace edits are refused (use writes to replace the whole file)`,
-          );
-        }
+        workingBytes = preimage.bytes;
+      }
+      // Search/replace goes through a string. A file that is not valid UTF-8 would not survive
+      // that round trip intact, so refuse rather than corrupt bytes the edit never mentioned.
+      let workingText = workingBytes.toString("utf8");
+      if (!Buffer.from(workingText, "utf8").equals(workingBytes)) {
+        throw new Error(
+          `"${safe.relPath}" is not valid UTF-8 text, so search/replace edits are refused (use writes to replace the whole file)`,
+        );
       }
 
-      const changeList = optionalList(item.changes, `ship.edits[${idx}].changes`);
+      const nested = optionalList(unwrapJson(pick(item, ["changes", "edits"])), `ship.edits[${idx}].changes`);
       const changes: ShipEditChange[] =
-        changeList.length > 0
-          ? changeList.map((ch, j) => parseChange(ch, `ship.edits[${idx}].changes[${j}]`))
-          : item.search !== undefined || item.replace !== undefined
+        nested.length > 0
+          ? nested.map((ch, j) => parseChange(ch, `ship.edits[${idx}].changes[${j}]`))
+          : pick(item, SEARCH_KEYS) !== undefined || pick(item, REPLACE_KEYS) !== undefined
             ? [parseChange(item, `ship.edits[${idx}]`)]
             : [];
       if (changes.length === 0) {
-        throw new Error(`Edit for "${safe.relPath}" requires search+replace or changes[]`);
+        throw new Error(
+          `ship.edits[${idx}] for "${safe.relPath}" needs search and replace, or a changes list` +
+            (typeof pick(item, CONTENT_KEYS) === "string" ? " (to replace the whole file, put it in writes)" : ""),
+        );
       }
-      for (const change of changes) {
-        workingText = applyChange(workingText, change, safe.relPath);
-      }
+
+      changes.forEach((change, j) => {
+        const where =
+          changes.length > 1 ? `${safe.relPath} (edits[${idx}].changes[${j}])` : `${safe.relPath} (edits[${idx}])`;
+        const outcome = applySearchReplace(workingText, change.search, change.replace, change.replace_all === true);
+        if (!outcome.ok) {
+          problems.push(`${where}: ${outcome.message}`);
+          return;
+        }
+        workingText = outcome.text;
+        if (outcome.how !== "exact" && outcome.how !== "line-endings") {
+          lenient.push(`${where}: matched by ignoring ${HOW_LABEL[outcome.how]}`);
+        }
+      });
 
       plansByRel.set(safe.relPath, {
-        relPath: safe.relPath,
-        absPath: safe.absPath,
+        ...safe,
         nextBytes: Buffer.from(workingText, "utf8"),
         preimage,
+        mode: earlier?.mode,
+        movedFrom: earlier?.movedFrom,
       });
-    });
+    }),
+  );
 
-    for (const target of deleteOps) {
+  deleteOps.forEach((item, idx) =>
+    attempt(() => {
+      const target = typeof item === "string" ? item : isRecord(item) ? pick(item, PATH_KEYS) : undefined;
+      if (typeof target !== "string" || !target) {
+        throw new Error(`ship.deletes[${idx}] must be a file path`);
+      }
       const safe = guardPath(target, "delete");
       if (plansByRel.has(safe.relPath)) {
         throw new Error(`"${safe.relPath}" is both written/edited and deleted in the same call`);
       }
       const preimage = snapshot(safe);
-      if (!preimage.existed) {
-        throw new Error(`Delete target not found: "${safe.relPath}"`);
-      }
-      plansByRel.set(safe.relPath, {
-        relPath: safe.relPath,
-        absPath: safe.absPath,
-        nextBytes: null,
-        preimage,
-      });
-    }
-  } catch (err) {
-    return abort(err instanceof Error ? err.message : String(err), t0);
+      if (!preimage.existed) throw notFound("Delete target", safe.relPath);
+      plansByRel.set(safe.relPath, { ...safe, nextBytes: null, preimage });
+    }),
+  );
+
+  if (problems.length === 1) {
+    return abort(`${problems[0]}\n\nNothing was written.`, t0);
+  }
+  if (problems.length > 1) {
+    return abort(
+      [
+        `${problems.length} problems, nothing was written.`,
+        ...problems.map((problem, i) => `${i + 1}. ${problem}`),
+        "Fix these and send the whole call again.",
+      ].join("\n\n"),
+      t0,
+    );
   }
 
   const plans = [...plansByRel.values()];
   if (plans.length === 0 && verifyList.length === 0) {
-    return abort("provide at least one write, edit, delete, or verify command", t0);
+    return abort("provide at least one write, edit, move, delete, or verify command", t0);
   }
 
   const describe = (plan: PlannedWrite): string =>
     plan.nextBytes === null
       ? `${plan.relPath} (deleted)`
-      : plan.preimage.existed
-        ? plan.relPath
-        : `${plan.relPath} (new)`;
+      : plan.movedFrom
+        ? `${plan.relPath} (moved from ${plan.movedFrom})`
+        : plan.preimage.existed
+          ? plan.relPath
+          : `${plan.relPath} (new)`;
   const fileList = plans.map((p) => p.relPath);
-  const fileSummary = plans.map(describe).join(", ");
+  // A move is one change: it is listed once, under its new name.
+  const listed = plans.filter((plan) => !plan.movedTo);
+  const changedCount = listed.length;
+  const fileSummary = listed.map(describe).join(", ");
+  // Said whenever the edits reached the disk or were tried: the model's picture of those files
+  // was slightly off, and it should know before it writes the next edit from the same picture.
+  const lenientNote =
+    lenient.length > 0
+      ? [
+          `Note: ${lenient.length} search text(s) did not match the file exactly. Each identified one place without ambiguity, so it was applied there:\n  - ${lenient.join("\n  - ")}`,
+        ]
+      : [];
 
   // From here on the workspace is modified. If the process is asked to stop while edits are
   // unverified, put the files back first instead of leaving a half-shipped tree behind.
@@ -796,7 +999,7 @@ export async function runShip(
           const newDirs = missingParentDirs(plan.absPath, workspaceRoot);
           fs.mkdirSync(path.dirname(plan.absPath), { recursive: true });
           createdDirs.push(...newDirs);
-          fs.writeFileSync(plan.absPath, plan.nextBytes);
+          fs.writeFileSync(plan.absPath, plan.nextBytes, plan.mode === undefined ? {} : { mode: plan.mode });
         }
         writtenSoFar.push(plan);
       }
@@ -819,9 +1022,16 @@ export async function runShip(
     }
 
     if (verifyList.length === 0) {
+      // The one thing that makes ship worth calling was left out. If the project says what its
+      // check is, name it, so the next call can use it.
+      const checks = describeChecks(detectChecks(workspaceRoot));
       return {
         status: "APPLIED_NO_VERIFY",
-        summary: `APPLIED_NO_VERIFY: ${fileList.length} file(s) changed (${fileSummary}). No verify command was given, so nothing was tested.`,
+        summary: [
+          `APPLIED_NO_VERIFY: ${changedCount} file(s) changed (${fileSummary}). No verify command was given, so nothing was tested.` +
+            (checks ? ` ${checks} Pass it as verify and a change that fails it is undone for you.` : ""),
+          ...lenientNote,
+        ].join("\n\n"),
         filesModified: fileList,
         verifyPassed: false,
         rollbackErrors: [],
@@ -832,6 +1042,7 @@ export async function runShip(
     // Phase 4: verify, one command at a time, stopping at the first failure.
     const passedOutputs: string[] = [];
     for (const cmd of verifyList) {
+      internalOpts.onProgress?.(`running ${cmd}`);
       const run = await runVerifyCommand(cmd, workspaceRoot, timeoutMs, (child) => {
         activeChild = child;
       });
@@ -841,7 +1052,7 @@ export async function runShip(
       }
 
       const reason = run.timedOut
-        ? `timed out after ${timeoutMs}ms`
+        ? `timed out after ${timeoutMs}ms; pass timeout_ms, up to 300000, if this check needs longer`
         : run.exitCode === null
           ? "could not be started"
           : `exit code ${run.exitCode}`;
@@ -852,6 +1063,7 @@ export async function runShip(
           status: "FAILED_KEPT_ON_DISK",
           summary: [
             `FAILED_KEPT_ON_DISK: verify "${cmd}" failed (${reason}). Changes kept on disk because rollback_on_fail=false: ${fileSummary || "none"}.`,
+            ...lenientNote,
             failedOutput,
           ].join("\n\n"),
           filesModified: fileList,
@@ -871,6 +1083,7 @@ export async function runShip(
           rollbackErrors.length === 0
             ? `Restored ${plans.length} file(s) to byte-exact pre-edit snapshots. The workspace is unchanged; fix the edit and ship again.`
             : `Restored ${plans.length - rollbackErrors.length} of ${plans.length} file(s). Rollback Errors (${rollbackErrors.length}):\n  - ${rollbackErrors.join("\n  - ")}\nThose files are not in their pre-edit state. Read them before shipping again.`,
+          ...lenientNote,
           failedOutput,
         ].join("\n\n"),
         filesModified: rollbackErrors.length === 0 ? [] : fileList,
@@ -884,7 +1097,8 @@ export async function runShip(
     return {
       status: "SHIPPED_AND_VERIFIED",
       summary: [
-        `SHIPPED_AND_VERIFIED in ${elapsedMs}ms: ${fileList.length} file(s) changed (${fileSummary || "verify-only"}).`,
+        `SHIPPED_AND_VERIFIED in ${elapsedMs}ms: ${changedCount} file(s) changed (${fileSummary || "verify-only"}).`,
+        ...lenientNote,
         ...passedOutputs,
       ].join("\n\n"),
       filesModified: fileList,

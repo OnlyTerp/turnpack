@@ -4,6 +4,9 @@
  * value or an error message the model can act on, instead of a stack trace.
  */
 
+/** Names under which a call may say which directory to work in. `root` is the documented one. */
+export const ROOT_KEYS = ["root", "cwd", "workdir", "directory"] as const;
+
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -54,5 +57,51 @@ export function optionalStringList(value: unknown, name: string): string[] {
       throw new Error(`${name}[${idx}] must be a string`);
     }
     return item;
+  });
+}
+
+/**
+ * Models reach for the argument names of the tools they were trained on (`old_string`,
+ * `file_path`, `oldText`). Reading the first name that is present costs nothing and saves the
+ * round trip a "missing field" error would cost.
+ */
+export function pick(raw: Record<string, unknown>, names: readonly string[]): unknown {
+  for (const name of names) {
+    const value = raw[name];
+    if (value !== undefined && value !== null) return value;
+  }
+  return undefined;
+}
+
+/**
+ * Some clients deliver a list or object argument as its JSON text. If `value` is a string that
+ * parses to a list or object, that is returned; anything else comes back unchanged.
+ */
+export function unwrapJson(value: unknown): unknown {
+  if (typeof value !== "string") return value;
+  const trimmed = value.trim();
+  if (!(trimmed.startsWith("[") && trimmed.endsWith("]")) && !(trimmed.startsWith("{") && trimmed.endsWith("}"))) {
+    return value;
+  }
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return typeof parsed === "object" && parsed !== null ? parsed : value;
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Argument names a tool does not know that look like they carry work: a list, an object, or a
+ * long text of several lines (a diff, a file's contents). Dropping those silently would drop
+ * part of what the model asked for. A one-line string of any length is not reported: some apps
+ * add a "reason" or "explanation" to every call, and a sentence is not a change.
+ */
+export function unknownWorkKeys(raw: Record<string, unknown>, known: readonly string[]): string[] {
+  return Object.keys(raw).filter((key) => {
+    if (known.includes(key) || key.startsWith("_")) return false;
+    const value = raw[key];
+    if (typeof value === "string") return value.length > 80 && value.includes("\n");
+    return typeof value === "object" && value !== null;
   });
 }

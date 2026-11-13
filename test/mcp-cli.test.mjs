@@ -12,7 +12,8 @@ import {
   resolveClientContext,
   serverCommand,
 } from "../dist/index.js";
-import { CLI_PATH, removeDir, startSession, wait } from "./helpers.mjs";
+import { appTargets, readConfiguredLaunch, stableNodePath } from "../dist/cli/installer.js";
+import { CLI_PATH, removeDir, startSession, trySymlink, wait } from "./helpers.mjs";
 
 const PACKAGE_JSON = JSON.parse(
   fs.readFileSync(path.resolve(import.meta.dirname, "..", "package.json"), "utf8"),
@@ -182,9 +183,11 @@ describe("MCP server framing, schema budget & CLI lifecycle", () => {
       PACKAGE_JSON.version,
     );
 
+    // --no-apps: the fences are this test's subject, not whatever AI apps the machine has.
     const docJson = JSON.parse(
-      execFileSync(process.execPath, [CLI_PATH, "doctor", "--json"], { encoding: "utf8" }),
+      execFileSync(process.execPath, [CLI_PATH, "doctor", "--json", "--no-apps"], { encoding: "utf8" }),
     );
+    assert.deepEqual(docJson.apps, []);
     assert.equal(docJson.ok, true, JSON.stringify(docJson.checks));
     assert.equal(docJson.estimatedSchemaTokens < 1500, true);
     assert.deepEqual(
@@ -412,14 +415,170 @@ describe("MCP protocol behaviour", () => {
     }
   });
 
-  it("uses CLAUDE_PROJECT_DIR when the launching app names the project that way", async () => {
+  it("uses CLAUDE_PROJECT_DIR when Claude names the project that way, and only then", async () => {
     const session = startSession({ cwd: outside, env: { CLAUDE_PROJECT_DIR: workspace } });
     try {
-      await session.initialize();
+      await session.initialize({ clientInfo: { name: "claude-code", version: "2.1.280" } });
       const inside = await session.call("pack", { files: ["a.txt"] });
       assert.match(inside.text, /inside-a/);
       const launchDir = await session.call("pack", { root: outside, files: ["secret.txt"] });
       assert.match(launchDir.text, /ERR_ROOT_OUTSIDE_WORKSPACE/);
+    } finally {
+      await session.close();
+    }
+
+    // Another app started from a Claude Code terminal inherits the variable. For that app it
+    // names somebody else's project, so the directory it was started in is the workspace.
+    const inherited = startSession({ cwd: outside, env: { CLAUDE_PROJECT_DIR: workspace } });
+    try {
+      await inherited.initialize({ clientInfo: { name: "codex-mcp-client", version: "0.166.0" } });
+      const own = await inherited.call("pack", { files: ["secret.txt"] });
+      assert.match(own.text, /outside-secret/);
+      const other = await inherited.call("pack", { root: workspace, files: ["a.txt"] });
+      assert.match(other.text, /ERR_ROOT_OUTSIDE_WORKSPACE/);
+    } finally {
+      await inherited.close();
+    }
+  });
+
+  it("has no workspace when started in the home directory: each call names its project and is confined to it", async () => {
+    // Desktop chat apps start their servers in the home directory or the app's own folder.
+    const fakeHome = path.join(base, "home");
+    fs.mkdirSync(path.join(fakeHome, ".ssh"), { recursive: true });
+    fs.writeFileSync(path.join(fakeHome, "notes.txt"), "home-notes\n");
+    const session = startSession({ cwd: fakeHome, env: { HOME: fakeHome, USERPROFILE: fakeHome } });
+    try {
+      const init = await session.initialize();
+      assert.match(init.result.instructions, /not started inside a project: pass `root`/);
+
+      const tools = (await session.request("tools/list")).result.tools;
+      for (const tool of tools) {
+        assert.ok(tool.inputSchema.required.includes("root"), tool.name);
+        assert.match(tool.inputSchema.properties.root.description, /Absolute path of the project directory/);
+      }
+
+      // Nothing is read from the home directory by default, and it cannot be named either.
+      const unnamed = await session.call("pack", { files: ["notes.txt"] });
+      assert.equal(unnamed.isError, true);
+      assert.match(unnamed.text, /ERR_NO_WORKSPACE/);
+      assert.equal(unnamed.text.includes("home-notes"), false);
+      for (const [root, expected] of [
+        [fakeHome, /ERR_ROOT_TOO_BROAD/],
+        [path.join(fakeHome, ".ssh"), /ERR_ROOT_TOO_BROAD/],
+        [path.parse(fakeHome).root, /ERR_ROOT_TOO_BROAD/],
+        ["workspace", /ERR_NO_WORKSPACE/],
+        [path.join(base, "does-not-exist"), /ERR_ROOT_NOT_A_DIRECTORY/],
+      ]) {
+        const refused = await session.call("pack", { root, files: ["notes.txt"] });
+        assert.match(refused.text, expected, String(root));
+        assert.equal(refused.text.includes("home-notes"), false);
+      }
+
+      // A named project works, under either argument name, and the call cannot leave it.
+      const named = await session.call("pack", { root: workspace, files: ["a.txt", "../outside/secret.txt"] });
+      assert.match(named.text, /inside-a/);
+      assert.match(named.text, /ERR_PATH_OUTSIDE_WORKSPACE/);
+      assert.equal(named.text.includes("outside-secret"), false);
+      const viaBatch = await session.call("batch", { cwd: workspace, code: "return ctx.read('a.txt').trim();" });
+      assert.match(viaBatch.text, /inside-a/);
+
+      // Naming a subdirectory is not a way out from under the project's verify allowlist.
+      fs.writeFileSync(
+        path.join(workspace, ".turnpack.json"),
+        JSON.stringify({ enforceVerifyAllowlist: true, allowedVerify: ["node -e 0"] }),
+      );
+      try {
+        const smuggled = await session.call("ship", {
+          root: path.join(workspace, "sub"),
+          writes: [{ path: "made.txt", content: "x" }],
+          verify: ["node -e 1"],
+        });
+        assert.match(smuggled.text, /ABORTED_BEFORE_WRITE[\s\S]*not in \.turnpack\.json allowedVerify/);
+        assert.equal(fs.existsSync(path.join(workspace, "sub", "made.txt")), false);
+      } finally {
+        fs.rmSync(path.join(workspace, ".turnpack.json"), { force: true });
+      }
+    } finally {
+      await session.close();
+    }
+
+    // A client that reports its folders gets a workspace from them, and is not asked for root.
+    const withRoots = startSession({
+      cwd: fakeHome,
+      env: { HOME: fakeHome, USERPROFILE: fakeHome },
+      onServerRequest: (msg) =>
+        msg.method === "roots/list" ? { roots: [{ uri: pathToFileURL(workspace).href }] } : undefined,
+    });
+    try {
+      const init = await withRoots.initialize({ capabilities: { roots: {} } });
+      assert.doesNotMatch(init.result.instructions, /not started inside a project/);
+      withRoots.notify("notifications/initialized");
+      const tools = (await withRoots.request("tools/list")).result.tools;
+      assert.equal(tools.some((tool) => (tool.inputSchema.required ?? []).includes("root")), false);
+      assert.match((await withRoots.call("pack", { files: ["a.txt"] })).text, /inside-a/);
+    } finally {
+      await withRoots.close();
+    }
+  });
+
+  it("describes its tools with plain types only, and still accepts the richer shapes", async () => {
+    // Unions are dropped or rejected by several model APIs, so the schema must not need them.
+    const walk = (node, where) => {
+      if (Array.isArray(node)) return node.forEach((item, i) => walk(item, `${where}[${i}]`));
+      if (!node || typeof node !== "object") return;
+      for (const banned of ["oneOf", "anyOf", "allOf", "not", "$ref"]) {
+        assert.equal(banned in node, false, `${where} uses ${banned}`);
+      }
+      if ("type" in node && where.endsWith(".properties") === false) {
+        assert.equal(typeof node.type, "string", `${where}.type must be one type`);
+      }
+      for (const [key, value] of Object.entries(node)) walk(value, `${where}.${key}`);
+    };
+    for (const tool of TOOLS) walk(tool.inputSchema, tool.name);
+
+    const session = startSession({ cwd: workspace });
+    try {
+      await session.initialize();
+      const asObject = await session.call("pack", { files: [{ path: "a.txt", start_line: 1, end_line: 1 }] });
+      assert.match(asObject.text, /inside-a/);
+      const asText = await session.call("pack", { files: JSON.stringify(["a.txt", "sub/b.txt"]) });
+      assert.match(asText.text, /inside-a[\s\S]*inside-b/);
+      const oneCommand = await session.call("ship", {
+        writes: [{ path: "sub/made.txt", content: "x\n" }],
+        verify: "node -e 0",
+      });
+      assert.match(oneCommand.text, /SHIPPED_AND_VERIFIED/);
+      fs.rmSync(path.join(workspace, "sub", "made.txt"), { force: true });
+    } finally {
+      await session.close();
+    }
+  });
+
+  it("names the project's check in its instructions and reports progress while verify runs", async () => {
+    const project = path.join(base, "node-project");
+    fs.mkdirSync(project);
+    fs.writeFileSync(path.join(project, "package.json"), JSON.stringify({ scripts: { test: "node -e 0" } }));
+    const session = startSession({ cwd: project });
+    try {
+      const init = await session.initialize();
+      assert.ok(init.result.instructions.startsWith(SERVER_INSTRUCTIONS));
+      assert.match(init.result.instructions, /This project's check: `npm test` \(from package\.json\)\. Use it as ship's verify\./);
+
+      const reply = await session.request("tools/call", {
+        name: "ship",
+        arguments: { writes: [{ path: "x.txt", content: "x\n" }], verify: ["node -e 0"] },
+        _meta: { progressToken: "tok-1" },
+      });
+      assert.match(reply.result.content[0].text, /SHIPPED_AND_VERIFIED/);
+      const progress = session.unsolicited.filter((msg) => msg.method === "notifications/progress");
+      assert.ok(progress.length >= 1);
+      assert.equal(progress[0].params.progressToken, "tok-1");
+      assert.match(progress[0].params.message, /running node -e 0/);
+
+      // No token, no notifications.
+      const before = session.unsolicited.length;
+      await session.call("ship", { writes: [{ path: "y.txt", content: "y\n" }], verify: ["node -e 0"] });
+      assert.equal(session.unsolicited.length, before);
     } finally {
       await session.close();
     }
@@ -573,20 +732,156 @@ describe("installer safety", () => {
     assert.match(fs.readFileSync(path.join(home, ".codex", "config.toml"), "utf8"), /\[mcp_servers\.turnpack\]/);
   });
 
-  it("launches through cmd on Windows, where npx is a batch file, and directly elsewhere", () => {
-    assert.deepEqual(serverCommand("linux"), { command: "npx", args: ["-y", "turnpack", "serve"] });
-    assert.deepEqual(serverCommand("darwin"), { command: "npx", args: ["-y", "turnpack", "serve"] });
-    assert.deepEqual(serverCommand("win32"), {
-      command: "cmd",
-      args: ["/c", "npx", "-y", "turnpack", "serve"],
-    });
+  it("writes a local, absolute launch by default, and a pinned npx one on request", () => {
+    // The npx form names the exact version, so a later release cannot change what an app runs.
+    const pinned = `turnpack@${PACKAGE_JSON.version}`;
+    assert.deepEqual(serverCommand("linux"), { command: "npx", args: ["-y", pinned, "serve"] });
+    assert.deepEqual(serverCommand("darwin"), { command: "npx", args: ["-y", pinned, "serve"] });
+    assert.deepEqual(serverCommand("win32"), { command: "cmd", args: ["/c", "npx", "-y", pinned, "serve"] });
 
-    fs.mkdirSync(path.join(home, ".codex"), { recursive: true });
+    const codexToml = path.join(home, ".codex", "config.toml");
+    fs.mkdirSync(path.dirname(codexToml), { recursive: true });
+    fs.rmSync(codexToml, { force: true });
+
+    // Default: this machine's Node and this build's cli.js, both by absolute path.
+    const out = run("init", "--client", "codex", "--yes");
+    assert.match(out, /Checked: the server starts with that command \(\d+ ms, version [\d.]+, tools: pack, ship, batch\)/);
+    const local = readConfiguredLaunch(appTargets(home).find((t) => t.key === "codex"));
+    assert.equal(path.isAbsolute(local.command), true);
+    assert.equal(fs.realpathSync(local.command), fs.realpathSync(process.execPath));
+    assert.deepEqual(local.args, [CLI_PATH, "serve"]);
+    // Room for a verify command that takes longer than these apps' 60-second default.
+    assert.match(fs.readFileSync(codexToml, "utf8"), /startup_timeout_sec = 20\r?\ntool_timeout_sec = 600/);
+
+    // --no-check: the package is not fetched from npm during the tests.
+    run("init", "--client", "codex", "--npx", "--yes", "--no-check");
+    assert.deepEqual(readConfiguredLaunch(appTargets(home).find((t) => t.key === "codex")), serverCommand());
+    assert.equal((fs.readFileSync(codexToml, "utf8").match(/\[mcp_servers\.turnpack\]/g) ?? []).length, 1);
+
+    // A Node on PATH that is the running one is preferred; one in a temporary directory is not.
+    assert.equal(fs.realpathSync(stableNodePath()), fs.realpathSync(process.execPath));
+    const shimDir = path.join(home, "shim");
+    fs.mkdirSync(shimDir, { recursive: true });
+    if (trySymlink(process.execPath, path.join(shimDir, process.platform === "win32" ? "node.exe" : "node"))) {
+      assert.equal(stableNodePath(process.execPath, shimDir), process.execPath);
+    }
+  });
+
+  it("copies the server's files to a durable place when asked, and removes them on uninstall", () => {
+    const claudePath = path.join(home, ".claude.json");
+    fs.writeFileSync(claudePath, "{}\n");
+    const versionDir = path.join(home, ".turnpack", "versions", PACKAGE_JSON.version);
+
+    const out = run("init", "--client", "claude", "--copy", "--yes");
+    assert.match(out, /\[CREATE\s*\] Turnpack server files/);
+    assert.match(out, /Checked: the server starts/);
+    const entry = JSON.parse(fs.readFileSync(claudePath, "utf8")).mcpServers.turnpack;
+    assert.deepEqual(entry.args, [path.join(versionDir, "dist", "cli.js"), "serve"]);
+    assert.equal(entry.type, "stdio");
+    for (const rel of ["package.json", "dist/cli.js", "dist/tools/batch-runner.js", "extensions/omp-turnpack.ts"]) {
+      assert.equal(fs.existsSync(path.join(versionDir, rel)), true, rel);
+    }
+    assert.deepEqual(fs.readdirSync(path.dirname(versionDir)), [PACKAGE_JSON.version]);
+
+    assert.match(run("init", "--client", "claude", "--copy", "--yes"), /already clean and up to date/);
+
+    run("uninstall", "--yes");
+    assert.equal(fs.existsSync(path.join(home, ".turnpack")), false);
+    assert.equal(fs.readFileSync(claudePath, "utf8"), "{}\n".replace("{}", '{\n  "mcpServers": {}\n}'));
+  });
+
+  it("keeps what you added to an entry, and removes every trace on uninstall", () => {
+    const codexToml = path.join(home, ".codex", "config.toml");
+    const before = [
+      'model = "gpt-test"',
+      "",
+      "[mcp_servers.other]",
+      'command = "other"',
+      "",
+      "[mcp_servers.turnpack]",
+      'command = "npx"',
+      "args = [",
+      '    "-y",',
+      '    "turnpack",',
+      '    "serve",',
+      "]",
+      'default_tools_approval_mode = "approve"',
+      "tool_timeout_sec = 1200",
+      "",
+      "[mcp_servers.turnpack.env]",
+      'KEEP_ME = "1"',
+      "",
+      "[mcp_servers.turnpack.tools.ship]",
+      'approval_mode = "prompt"',
+      "",
+      "[tui]",
+      "theme = 'dark'",
+      "",
+    ].join("\r\n");
+    fs.mkdirSync(path.dirname(codexToml), { recursive: true });
+    fs.writeFileSync(codexToml, before);
+
     run("init", "--client", "codex", "--yes");
-    const toml = fs.readFileSync(path.join(home, ".codex", "config.toml"), "utf8");
-    const expected = serverCommand();
-    assert.match(toml, new RegExp(`command = "${expected.command}"`));
-    assert.equal(toml.includes(`args = [${expected.args.map((a) => `"${a}"`).join(", ")}]`), true);
+    const after = fs.readFileSync(codexToml, "utf8");
+    assert.equal(after.includes("\n") && !/[^\r]\n/.test(after), true, "CRLF line endings are kept");
+    // Your own timeout wins over init's default; the one you did not set gets the default.
+    assert.equal(after.includes("tool_timeout_sec = 600"), false);
+    for (const kept of ["tool_timeout_sec = 1200", "startup_timeout_sec = 20", 'default_tools_approval_mode = "approve"', 'KEEP_ME = "1"', 'approval_mode = "prompt"', "theme = 'dark'", 'command = "other"']) {
+      assert.equal(after.includes(kept), true, kept);
+    }
+    assert.equal(after.includes('"turnpack",'), false, "the old multi-line args are gone");
+    for (const table of ["[mcp_servers.turnpack]", "[mcp_servers.turnpack.env]", "[mcp_servers.turnpack.tools.ship]"]) {
+      assert.equal(after.split(table).length, 2, `${table} appears once`);
+    }
+
+    run("uninstall", "--client", "codex", "--yes");
+    assert.equal(
+      fs.readFileSync(codexToml, "utf8"),
+      ['model = "gpt-test"', "", "[mcp_servers.other]", 'command = "other"', "", "[tui]", "theme = 'dark'", ""].join("\r\n"),
+    );
+
+    // The same for a JSON entry: extra keys survive, and the launch is replaced.
+    const claudePath = path.join(home, ".claude.json");
+    fs.writeFileSync(
+      claudePath,
+      JSON.stringify({ mcpServers: { turnpack: { command: "npx", args: ["turnpack"], alwaysLoad: true, env: { KEEP: "1" } } } }, null, "\t"),
+    );
+    run("init", "--client", "claude", "--yes");
+    const text = fs.readFileSync(claudePath, "utf8");
+    assert.match(text, /^\{\n\t"mcpServers"/, "tab indentation is kept");
+    const entry = JSON.parse(text).mcpServers.turnpack;
+    assert.deepEqual([entry.alwaysLoad, entry.env, entry.type, entry.args[1]], [true, { KEEP: "1" }, "stdio", "serve"]);
+  });
+
+  it("configures Claude Desktop and Grok, and pins a folder only for a named app", () => {
+    const desktopDir =
+      process.platform === "win32"
+        ? path.join(home, "AppData", "Roaming", "Claude")
+        : process.platform === "darwin"
+          ? path.join(home, "Library", "Application Support", "Claude")
+          : path.join(home, ".config", "Claude");
+    fs.mkdirSync(desktopDir, { recursive: true });
+    fs.mkdirSync(path.join(home, ".grok"), { recursive: true });
+    const project = path.join(home, "my-project");
+    fs.mkdirSync(project);
+
+    const out = run("init", "--yes");
+    assert.match(out, /Claude Desktop -> /);
+    assert.match(out, /Grok Build \(grok CLI\) -> /);
+    assert.match(out, /Claude Desktop chats have no project folder/);
+    const desktopConfig = path.join(desktopDir, "claude_desktop_config.json");
+    assert.equal("env" in JSON.parse(fs.readFileSync(desktopConfig, "utf8")).mcpServers.turnpack, false);
+    assert.match(fs.readFileSync(path.join(home, ".grok", "config.toml"), "utf8"), /\[mcp_servers\.turnpack\][\s\S]*enabled = true\r?\nstartup_timeout_sec = 20/);
+
+    // A pinned folder would apply to every session of an app, so it needs the app's name.
+    assert.throws(() => run("init", "--root", project, "--yes"), /--root pins one folder for every session/);
+    assert.throws(() => run("init", "--client", "claude-desktop", "--root", path.join(home, "nope"), "--yes"), /is not an existing folder/);
+    run("init", "--client", "claude-desktop", "--root", project, "--yes");
+    assert.deepEqual(JSON.parse(fs.readFileSync(desktopConfig, "utf8")).mcpServers.turnpack.env, {
+      TURNPACK_ROOT: fs.realpathSync(project),
+    });
+    // The codex config written earlier was not given the folder.
+    assert.equal(fs.existsSync(path.join(home, ".codex", "config.toml")) && fs.readFileSync(path.join(home, ".codex", "config.toml"), "utf8").includes("TURNPACK_ROOT"), false);
   });
 
   it("previews without writing on --dry-run, backs up before writing, and is idempotent", () => {
@@ -602,23 +897,111 @@ describe("installer safety", () => {
     const written = JSON.parse(fs.readFileSync(claudePath, "utf8"));
     assert.equal(written.numStartups, 7);
     assert.deepEqual(written.mcpServers.keep, { command: "echo" });
-    assert.deepEqual(written.mcpServers.turnpack, serverCommand());
+    assert.deepEqual(written.mcpServers.turnpack, { type: "stdio", command: stableNodePath(), args: [CLI_PATH, "serve"] });
     assert.equal(fs.readFileSync(`${claudePath}.turnpack.bak`, "utf8"), original);
     assert.equal(fs.existsSync(`${claudePath}.turnpack.tmp`), false);
 
     const again = run("init", "--client", "claude", "--yes");
     assert.match(again, /already clean and up to date/);
 
+    // Uninstall puts the file back byte for byte, not merely to equivalent JSON.
     run("uninstall", "--client", "claude", "--yes");
-    assert.deepEqual(JSON.parse(fs.readFileSync(claudePath, "utf8")), JSON.parse(original));
+    assert.equal(fs.readFileSync(claudePath, "utf8"), original);
+  });
+
+  it("doctor starts each app's configured server and says which apps are ready", () => {
+    const fresh = fs.mkdtempSync(path.join(os.tmpdir(), "turnpack-doc-home-"));
+    try {
+      const doctor = () => {
+        try {
+          return { code: 0, out: execFileSync(process.execPath, [CLI_PATH, "doctor", "--json", "--home", fresh], { encoding: "utf8" }) };
+        } catch (err) {
+          return { code: err.status, out: String(err.stdout) };
+        }
+      };
+      // Three apps installed: one will be configured, one left alone, one configured badly.
+      fs.writeFileSync(path.join(fresh, ".claude.json"), "{}\n");
+      fs.mkdirSync(path.join(fresh, ".codex"));
+      fs.mkdirSync(path.join(fresh, ".cursor"));
+      execFileSync(process.execPath, [CLI_PATH, "init", "--client", "claude", "--yes", "--home", fresh], { encoding: "utf8" });
+
+      const healthy = doctor();
+      const apps = Object.fromEntries(JSON.parse(healthy.out).apps.map((app) => [app.client, app]));
+      assert.equal(healthy.code, 0);
+      assert.equal(apps["Claude Code"].state, "ready");
+      assert.match(apps["Claude Code"].detail, /starts in \d+ ms/);
+      assert.equal(apps["Codex CLI and ChatGPT desktop app"].state, "not-configured");
+
+      fs.writeFileSync(
+        path.join(fresh, ".cursor", "mcp.json"),
+        JSON.stringify({ mcpServers: { turnpack: { command: "turnpack-no-such-program", args: ["serve"] } } }),
+      );
+      const broken = doctor();
+      const report = JSON.parse(broken.out);
+      assert.equal(broken.code, 1);
+      assert.equal(report.ok, false);
+      const cursor = report.apps.find((app) => app.client.startsWith("Cursor"));
+      assert.equal(cursor.state, "failed");
+      assert.match(cursor.detail, /"turnpack-no-such-program" was not found, so the app cannot start it/);
+    } finally {
+      fs.rmSync(fresh, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Claude Desktop bundle", () => {
+  it("is a readable zip whose manifest starts the server it contains", async () => {
+    const zlib = await import("node:zlib");
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "turnpack-mcpb-"));
+    try {
+      const script = path.resolve(import.meta.dirname, "..", "scripts", "build-mcpb.mjs");
+      execFileSync(process.execPath, [script, "--out", outDir], { encoding: "utf8" });
+      const zip = fs.readFileSync(path.join(outDir, "turnpack.mcpb"));
+
+      // Read the archive back the way any unzip tool does: from the directory at its end.
+      const end = zip.length - 22;
+      assert.equal(zip.readUInt32LE(end), 0x06054b50);
+      const count = zip.readUInt16LE(end + 10);
+      let at = zip.readUInt32LE(end + 16);
+      const files = new Map();
+      for (let i = 0; i < count; i++) {
+        assert.equal(zip.readUInt32LE(at), 0x02014b50);
+        const packedSize = zip.readUInt32LE(at + 20);
+        const nameLength = zip.readUInt16LE(at + 28);
+        const name = zip.subarray(at + 46, at + 46 + nameLength).toString("utf8");
+        const local = zip.readUInt32LE(at + 42);
+        const dataStart = local + 30 + zip.readUInt16LE(local + 26) + zip.readUInt16LE(local + 28);
+        const data = zlib.inflateRawSync(zip.subarray(dataStart, dataStart + packedSize));
+        // zlib.crc32 arrived in Node 22.2; inflating without an error is the check before that.
+        if (typeof zlib.crc32 === "function") assert.equal(zlib.crc32(data), zip.readUInt32LE(at + 16), name);
+        files.set(name, data);
+        at += 46 + nameLength;
+      }
+
+      const manifest = JSON.parse(files.get("manifest.json").toString("utf8"));
+      assert.equal(manifest.manifest_version, "0.3");
+      assert.equal(manifest.version, PACKAGE_JSON.version);
+      assert.deepEqual(manifest.tools.map((tool) => tool.name), ["pack", "ship", "batch"]);
+      assert.equal(manifest.user_config.project_folder.type, "directory");
+      assert.equal(manifest.server.mcp_config.env.TURNPACK_ROOT, "${user_config.project_folder}");
+      // Everything the manifest starts, and everything the server loads later, is inside.
+      const entry = manifest.server.mcp_config.args[0].replace("${__dirname}/", "");
+      for (const needed of [entry, "package.json", "dist/mcp-server.js", "dist/tools/batch-runner.js", "dist/search-worker.js"]) {
+        assert.equal(files.has(needed), true, needed);
+      }
+      assert.deepEqual(files.get("dist/cli.js"), fs.readFileSync(CLI_PATH));
+      assert.equal([...files.keys()].some((name) => name.endsWith(".d.ts") || name.includes("\\")), false);
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+    }
   });
 });
 
 describe("optional Claude Code hook", () => {
   const HOOK = path.resolve(import.meta.dirname, "..", "extensions", "claude-hook.mjs");
-  const fire = (tool, session) =>
+  const fire = (tool, session, command) =>
     execFileSync(process.execPath, [HOOK], {
-      input: JSON.stringify({ tool_name: tool, session_id: session }),
+      input: JSON.stringify({ tool_name: tool, session_id: session, ...(command ? { tool_input: { command } } : {}) }),
       encoding: "utf8",
     });
 
@@ -641,6 +1024,22 @@ describe("optional Claude Code hook", () => {
       assert.equal(fire("Read", session), "");
       assert.equal(fire("Read", session), "");
       assert.equal(fire("Read", session), "");
+    } finally {
+      fs.rmSync(path.join(os.tmpdir(), `turnpack-hook-${session}.json`), { force: true });
+    }
+  });
+
+  it("counts reads and searches made through the shell, but not other commands", () => {
+    // Where Claude Code has no Grep or Glob tool, searching is a shell command.
+    const session = `test-shell-${process.pid}-${Date.now()}`;
+    try {
+      assert.equal(fire("Bash", session, "rg -n calculateTax src"), "");
+      assert.equal(fire("Bash", session, "npm test"), "");
+      assert.equal(fire("Bash", session, "cd src && cat tax.js"), "");
+      assert.equal(fire("PowerShell", session, "Get-Content src/invoice.js"), "");
+      assert.equal(fire("Bash", session, "git commit -m 'grep is only a word here'"), "");
+      const spoken = JSON.parse(fire("Bash", session, "grep -rn computeTax ."));
+      assert.match(spoken.hookSpecificOutput.additionalContext, /mcp__turnpack__ship/);
     } finally {
       fs.rmSync(path.join(os.tmpdir(), `turnpack-hook-${session}.json`), { force: true });
     }

@@ -211,6 +211,144 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
     assert.deepEqual(fs.readdirSync(repoDir).filter((name) => /[. ]$/.test(name)), []);
   });
 
+  it("lists every edit that cannot be applied in one reply, with the nearest text", async () => {
+    fs.writeFileSync(path.join(repoDir, "c.js"), "export function total(n) {\n  return n + 1;\n}\nexport const Z = 1;\nexport const Y = 1;\n");
+    const before = ["a.js", "b.js", "c.js"].map((f) => sha(path.join(repoDir, f)));
+
+    const res = await runShip({
+      cwd: repoDir,
+      edits: [
+        { path: "a.js", search: "1", replace: "10" },
+        { path: "c.js", search: "export function total(n) {\n  return n + 2;\n}", replace: "x" },
+        { path: "c.js", search: " = 1;", replace: " = 2;" },
+        { path: "src/b.js", search: "2", replace: "20" },
+      ],
+      verify: "node check.mjs",
+    });
+
+    assert.equal(res.status, "ABORTED_BEFORE_WRITE");
+    assert.match(res.summary, /3 problems, nothing was written/);
+    assert.match(res.summary, /1\. c\.js \(edits\[1\]\): search text not found\. The closest text is lines 1-3/);
+    assert.match(res.summary, /First difference, at line 2:/);
+    assert.match(res.summary, /2\. c\.js \(edits\[2\]\): search text matches 2 places \(lines 4, 5\)/);
+    assert.match(res.summary, /3\. Edit target not found: "src\/b\.js"\. Did you mean "b\.js"\?/);
+    assert.deepEqual(["a.js", "b.js", "c.js"].map((f) => sha(path.join(repoDir, f))), before);
+  });
+
+  it("applies an edit whose indentation is off, and says that it did", async () => {
+    fs.writeFileSync(path.join(repoDir, "c.js"), "export function f(x) {\n    if (x) {\n        return 1;\n    }\n    return 0;\n}\n");
+    const res = await runShip({
+      cwd: repoDir,
+      edits: [{ path: "c.js", search: "if (x) {\n    return 1;\n}", replace: "if (x) {\n    return 2;\n}" }],
+      verify: "node check.mjs",
+    });
+    assert.equal(res.status, "SHIPPED_AND_VERIFIED");
+    assert.equal(fs.readFileSync(path.join(repoDir, "c.js"), "utf8"), "export function f(x) {\n    if (x) {\n        return 2;\n    }\n    return 0;\n}\n");
+    assert.match(res.summary, /1 search text\(s\) did not match the file exactly/);
+    assert.match(res.summary, /c\.js \(edits\[0\]\): matched by ignoring indentation/);
+  });
+
+  it("accepts the argument names of other edit tools, and refuses arguments it would have to drop", async () => {
+    const res = await runShip({
+      root: repoDir,
+      edits: JSON.stringify([
+        { file_path: "a.js", old_string: "1", new_string: "10" },
+        { path: "b.js", edits: [{ oldText: "2", newText: "20" }] },
+      ]),
+      verify_command: "node check.mjs",
+      // Some apps add a sentence like this to every tool call. However long, it is not a change.
+      explanation: "Renaming the constant in both files and running the check, because the task asks for the two values to be updated together.",
+    });
+    assert.equal(res.status, "SHIPPED_AND_VERIFIED");
+    assert.match(fs.readFileSync(path.join(repoDir, "b.js"), "utf8"), /B = 20/);
+
+    const stray = await runShip({
+      cwd: repoDir,
+      edits: [{ path: "a.js", search: "10", replace: "1" }],
+      patches: [{ path: "b.js", diff: "-2\n+3" }],
+    });
+    assert.equal(stray.status, "ABORTED_BEFORE_WRITE");
+    assert.match(stray.summary, /unknown argument "patches"/);
+    // A long text of several lines is work too: this is what a diff under the wrong name looks like.
+    const misnamed = await runShip({
+      cwd: repoDir,
+      unified_diff: `--- a/a.js\n+++ b/a.js\n@@ -1 +1 @@\n-export const A = 10;\n+export const A = 1;\n${"// padding\n".repeat(6)}`,
+    });
+    assert.match(misnamed.summary, /unknown argument "unified_diff"/);
+    assert.match(fs.readFileSync(path.join(repoDir, "a.js"), "utf8"), /A = 10/);
+  });
+
+  it("moves a file and edits it under its new name in one call, and undoes the move on failure", async () => {
+    const aBytes = fs.readFileSync(path.join(repoDir, "a.js"));
+    const checkBefore = sha(path.join(repoDir, "check.mjs"));
+    const call = (verify) =>
+      runShip({
+        cwd: repoDir,
+        moves: [{ from: "a.js", to: "lib/core/a.js" }],
+        edits: [
+          { path: "lib/core/a.js", search: "A = 1", replace: "A = 10" },
+          { path: "b.js", search: "2", replace: "20" },
+          { path: "check.mjs", search: "./a.js", replace: "./lib/core/a.js" },
+        ],
+        verify,
+      });
+
+    const failed = await call("node -e \"process.exit(1)\"");
+    assert.equal(failed.status, "FAILED_AND_ROLLED_BACK");
+    assert.ok(fs.readFileSync(path.join(repoDir, "a.js")).equals(aBytes));
+    assert.equal(fs.existsSync(path.join(repoDir, "lib")), false);
+    assert.equal(sha(path.join(repoDir, "check.mjs")), checkBefore);
+
+    const shipped = await call("node check.mjs");
+    assert.equal(shipped.status, "SHIPPED_AND_VERIFIED");
+    assert.match(shipped.summary, /3 file\(s\) changed \(lib\/core\/a\.js \(moved from a\.js\), b\.js, check\.mjs\)/);
+    assert.equal(fs.existsSync(path.join(repoDir, "a.js")), false);
+    assert.equal(fs.readFileSync(path.join(repoDir, "lib", "core", "a.js"), "utf8"), "export const A = 10;\n");
+
+    const cases = [
+      [{ moves: [{ from: "b.js", to: "c.js" }], edits: [{ path: "b.js", search: "20", replace: "2" }] }, /"b\.js" is moved to "c\.js" by this call; edit it under its new path/],
+      [{ moves: [{ from: "b.js", to: "check.mjs" }] }, /Move target already exists: "check\.mjs"/],
+      [{ moves: [{ from: "nope.js", to: "c.js" }] }, /Move source not found: "nope\.js"/],
+      [{ moves: [{ from: "b.js", to: ".git/hooks/pre-commit" }] }, /protected/],
+      [{ moves: [{ from: "b.js", to: "../outside.js" }] }, /ERR_PATH_OUTSIDE_WORKSPACE/],
+    ];
+    for (const [args, expected] of cases) {
+      const res = await runShip({ cwd: repoDir, ...args });
+      assert.equal(res.status, "ABORTED_BEFORE_WRITE", JSON.stringify(args));
+      assert.match(res.summary, expected);
+    }
+    assert.equal(fs.existsSync(path.join(repoDir, "b.js")), true);
+  });
+
+  it("names the project's own check when a change is shipped without one", async () => {
+    const edit = (n) => ({ cwd: repoDir, edits: [{ path: "a.js", search: /A = \d+/.exec(fs.readFileSync(path.join(repoDir, "a.js"), "utf8"))[0], replace: `A = ${n}` }] });
+
+    const bare = await runShip(edit(2));
+    assert.equal(bare.status, "APPLIED_NO_VERIFY");
+    assert.doesNotMatch(bare.summary, /This project/);
+
+    fs.writeFileSync(
+      path.join(repoDir, "package.json"),
+      JSON.stringify({ scripts: { test: "node check.mjs", typecheck: "tsc --noEmit", dev: "vite" } }),
+    );
+    const hinted = await runShip(edit(3));
+    assert.match(hinted.summary, /This project's checks: `npm run typecheck`, `npm test` \(from package\.json\)\. Pass it as verify/);
+
+    // npm's placeholder script and watchers are not checks.
+    fs.writeFileSync(
+      path.join(repoDir, "package.json"),
+      JSON.stringify({ scripts: { test: "echo \"Error: no test specified\" && exit 1", typecheck: "tsc --watch" } }),
+    );
+    assert.doesNotMatch((await runShip(edit(4))).summary, /This project/);
+
+    // With an enforced allowlist, the list is the answer.
+    fs.writeFileSync(
+      path.join(repoDir, ".turnpack.json"),
+      JSON.stringify({ enforceVerifyAllowlist: true, allowedVerify: ["node check.mjs", "npm test *"] }),
+    );
+    assert.match((await runShip(edit(5))).summary, /This project only lets ship run: `node check\.mjs`, `npm test`\./);
+  });
+
   it("enforces the verify allowlist against shell-operator smuggling", async () => {
     fs.writeFileSync(
       path.join(repoDir, ".turnpack.json"),
@@ -465,12 +603,15 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
   it("explains malformed arguments instead of throwing", async () => {
     const cases = [
       [{ cwd: repoDir, edits: [{ search: "1", replace: "2" }] }, /ship\.edits\[0\]\.path must be a non-empty string/],
-      [{ cwd: repoDir, edits: [{ path: "a.js" }] }, /requires search\+replace or changes\[\]/],
+      [{ cwd: repoDir, edits: [{ path: "a.js" }] }, /needs search and replace, or a changes list/],
+      [{ cwd: repoDir, edits: [{ path: "a.js", content: "x" }] }, /to replace the whole file, put it in writes/],
       [{ cwd: repoDir, writes: [{ path: "x.txt" }] }, /ship\.writes\[0\]\.content must be a string/],
       [{ cwd: repoDir, writes: [{ path: ".", content: "x" }] }, /workspace root, not a file/],
-      [{ cwd: repoDir, edits: [{ path: "a.js", search: "", replace: "x" }] }, /Empty search anchor/],
+      [{ cwd: repoDir, edits: [{ path: "a.js", search: "", replace: "x" }] }, /the search text is empty/],
+      [{ cwd: repoDir, deletes: [42] }, /ship\.deletes\[0\] must be a file path/],
+      [{ cwd: repoDir, moves: [{ from: "a.js" }] }, /ship\.moves\[0\]\.to must be a non-empty string/],
       [{ cwd: repoDir, deletes: ["missing.js"] }, /Delete target not found/],
-      [{ cwd: repoDir }, /provide at least one write, edit, delete, or verify command/],
+      [{ cwd: repoDir }, /provide at least one write, edit, move, delete, or verify command/],
     ];
     for (const [args, expected] of cases) {
       const res = await runShip(args);

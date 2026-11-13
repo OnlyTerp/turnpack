@@ -2,7 +2,7 @@ import { fork, spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { resolveWorkspaceRoot } from "../security.js";
-import { isRecord, optionalBoolean, optionalNumber, optionalString, requiredString } from "../validate.js";
+import { isRecord, optionalBoolean, optionalNumber, optionalString, pick, requiredString, ROOT_KEYS } from "../validate.js";
 import { runGitStatus, runSearch, type SearchHit, type SymbolOutline } from "../workspace.js";
 
 export interface BatchArgs {
@@ -299,7 +299,7 @@ export async function runBatchDetailed(args: BatchArgs): Promise<BatchOutcome> {
   const t0 = performance.now();
   const raw: Record<string, unknown> = isRecord(args) ? args : {};
   const code = requiredString(raw.code, "batch.code");
-  const root = resolveWorkspaceRoot(optionalString(raw.cwd, "batch.cwd"));
+  const root = resolveWorkspaceRoot(optionalString(pick(raw, ROOT_KEYS), "batch.root"));
   const allowSecrets = optionalBoolean(raw.allow_secrets, "batch.allow_secrets") ?? false;
   const timeoutMs = Math.min(
     30000,

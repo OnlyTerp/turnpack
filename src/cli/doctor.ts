@@ -5,7 +5,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { runBatchDetailed, type BatchIsolation } from "../tools/batch.js";
-import { bold, green, red, rule, yellow } from "./style.js";
+import { VERSION } from "../version.js";
+import { appTargets, readConfiguredLaunch } from "./installer.js";
+import { probeLaunch, type ProbeResult } from "./probe.js";
+import { bold, dim, green, red, rule, yellow } from "./style.js";
 import { removeTempDir } from "./tempdir.js";
 
 const execFileAsync = promisify(execFile);
@@ -18,6 +21,22 @@ export interface DoctorCheck {
   warn?: boolean;
 }
 
+/** What doctor found for one AI app on this machine. */
+export interface AppCheck {
+  client: string;
+  configPath: string;
+  /**
+   * - "ready": the app's config starts a working server.
+   * - "failed": it has an entry, and the entry does not start.
+   * - "not-configured": the app is installed and has no Turnpack entry.
+   * - "unreadable": its config could not be parsed.
+   */
+  state: "ready" | "failed" | "not-configured" | "unreadable";
+  detail: string;
+  /** A passing entry that is still worth changing. */
+  warn?: boolean;
+}
+
 export interface DoctorReport {
   ok: boolean;
   nodeVersion: string;
@@ -27,6 +46,52 @@ export interface DoctorReport {
   handshakeMs: number;
   batchIsolation: BatchIsolation | null;
   checks: DoctorCheck[];
+  apps: AppCheck[];
+}
+
+/**
+ * Looks at each AI app installed here and, where it has a Turnpack entry, starts the server
+ * with that exact command. A config entry that points at a Node that was since upgraded away,
+ * or at a package cache that was since cleaned, looks fine in the file and fails in the app.
+ */
+export async function checkApps(homeDir: string): Promise<AppCheck[]> {
+  const results: AppCheck[] = [];
+  const probes = new Map<string, Promise<ProbeResult>>();
+  for (const target of appTargets(homeDir)) {
+    if (!fs.existsSync(target.detectDir) && !fs.existsSync(target.configPath)) continue;
+    const base = { client: target.client, configPath: target.configPath };
+    let launch: ReturnType<typeof readConfiguredLaunch>;
+    try {
+      launch = readConfiguredLaunch(target);
+    } catch (err) {
+      results.push({ ...base, state: "unreadable", detail: err instanceof Error ? err.message : String(err) });
+      continue;
+    }
+    if (!launch) {
+      results.push({ ...base, state: "not-configured", detail: "no Turnpack entry (npx turnpack init adds one)" });
+      continue;
+    }
+    const viaNpx = [launch.command, ...launch.args].some((part) => /^npx(\.cmd)?$/i.test(path.basename(part)));
+    const key = JSON.stringify(launch);
+    const probe =
+      probes.get(key) ?? probeLaunch(launch, os.tmpdir(), viaNpx ? 60000 : 15000);
+    probes.set(key, probe);
+    const result = await probe;
+    if (!result.ok) {
+      results.push({ ...base, state: "failed", detail: `does not start: ${result.error} (npx turnpack init rewrites the entry)` });
+      continue;
+    }
+    const notes: string[] = [];
+    if (result.version && result.version !== VERSION) notes.push(`runs ${result.version}, this is ${VERSION}: run init to update`);
+    if (viaNpx && !launch.args.some((arg) => /^turnpack@\d/.test(arg))) notes.push("unpinned npx: run init to pin it");
+    results.push({
+      ...base,
+      state: "ready",
+      warn: notes.length > 0,
+      detail: `starts in ${result.ms} ms${notes.length ? `; ${notes.join("; ")}` : ""}`,
+    });
+  }
+  return results;
 }
 
 function getCliEntryPath(): string {
@@ -112,7 +177,9 @@ function toolResult(response: Record<string, unknown> | undefined): { text: stri
   return { text: result?.content?.[0]?.text ?? "", isError: result?.isError === true };
 }
 
-export async function runDoctor(options: { json?: boolean } = {}): Promise<DoctorReport> {
+export async function runDoctor(
+  options: { json?: boolean; homeDir?: string; apps?: boolean } = {},
+): Promise<DoctorReport> {
   const majorNode = Number(process.versions.node.split(".")[0] ?? "0");
   const checks: DoctorCheck[] = [
     { name: "Node.js >= 22", ok: majorNode >= 22, detail: `v${process.versions.node}` },
@@ -237,8 +304,17 @@ export async function runDoctor(options: { json?: boolean } = {}): Promise<Docto
     await removeTempDir(sandbox);
   }
 
+  let apps: AppCheck[] = [];
+  if (options.apps !== false) {
+    try {
+      apps = await checkApps(options.homeDir ?? os.homedir());
+    } catch {
+      apps = [];
+    }
+  }
+
   const report: DoctorReport = {
-    ok: checks.every((c) => c.ok),
+    ok: checks.every((c) => c.ok) && apps.every((app) => app.state !== "failed"),
     nodeVersion: `v${process.versions.node}`,
     ripgrepVersion: rgVersion,
     schemaBytes,
@@ -246,6 +322,7 @@ export async function runDoctor(options: { json?: boolean } = {}): Promise<Docto
     handshakeMs,
     batchIsolation,
     checks,
+    apps,
   };
 
   if (options.json) {
@@ -259,10 +336,34 @@ export async function runDoctor(options: { json?: boolean } = {}): Promise<Docto
     out.push(`  [${tag}] ${check.name.padEnd(28)} ${check.detail}`);
   }
   out.push(rule(80));
+  if (apps.length > 0) {
+    out.push(`  ${bold("Your AI apps")}`);
+    for (const app of apps) {
+      const tag =
+        app.state === "ready"
+          ? app.warn
+            ? yellow("warn")
+            : green("ok  ")
+          : app.state === "not-configured"
+            ? dim(" -- ")
+            : red("FAIL");
+      const name = app.client.replace(/ \(.*\)$/, "").replace(/ MCP$/, "");
+      out.push(`  [${tag}] ${name.padEnd(34)} ${app.detail}`);
+    }
+    out.push(rule(80));
+  }
+  const fencesOk = checks.every((c) => c.ok);
+  const broken = apps.filter((app) => app.state === "failed" || app.state === "unreadable");
+  const ready = apps.filter((app) => app.state === "ready");
+  const missing = apps.filter((app) => app.state === "not-configured");
   out.push(
-    report.ok
-      ? `  ${green("All checks passed.")} Next: ${bold("npx turnpack init")}`
-      : `  ${red("Some checks failed.")} Please open an issue and paste this output.`,
+    !fencesOk
+      ? `  ${red("Some checks failed.")} Please open an issue and paste this output.`
+      : broken.length > 0
+        ? `  ${red(`${broken.length} app(s) cannot start Turnpack.`)} Fix: ${bold("npx turnpack init")}`
+        : ready.length > 0 && missing.length === 0
+          ? `  ${green("All checks passed.")} Turnpack is ready in ${ready.length} app(s). Restart an app after any change.`
+          : `  ${green("All checks passed.")} Next: ${bold("npx turnpack init")}`,
   );
   out.push("");
   process.stdout.write(`${out.join("\n")}\n`);

@@ -14,10 +14,10 @@ A local MCP server: gather context in one call, ship multi-file edits behind you
 
 Try it (no API keys, nothing of yours is touched):
   npx turnpack demo       Walk through pack, ship and batch in a throwaway temp repo
-  npx turnpack doctor     Check Node, the MCP handshake, the secret shield and the sandbox
+  npx turnpack doctor     Check Node, the fences, and that each of your AI apps can start the server
 
 Set it up:
-  npx turnpack init       Preview, then add Turnpack to Claude Code, Codex CLI or OMP
+  npx turnpack init       Preview, then add Turnpack to Claude Code, Claude Desktop, Codex / ChatGPT, OMP and Grok
   npx turnpack audit      Read-only scan of the MCP servers your AI apps already load
   npx turnpack uninstall  Remove only the entries init added
 
@@ -28,6 +28,8 @@ Other:
 Examples:
   npx turnpack init --dry-run
   npx turnpack init --client cursor --yes
+  npx turnpack init --client claude-desktop --root ~/code/my-app
+  npx turnpack init --npx        Write a portable "npx turnpack@<version>" entry instead of a local path
   npx turnpack estimate --ttft 2 --tok-per-turn 300 --tps 40
 
 Docs: https://github.com/OnlyTerp/turnpack
@@ -61,7 +63,12 @@ async function main(): Promise<void> {
   }
 
   if (cmd === "doctor") {
-    const report = await runDoctor({ json: rest.includes("--json") });
+    const homeAt = rest.indexOf("--home");
+    const report = await runDoctor({
+      json: rest.includes("--json"),
+      homeDir: homeAt !== -1 && rest[homeAt + 1] ? rest[homeAt + 1] : undefined,
+      apps: !rest.includes("--no-apps"),
+    });
     if (!report.ok) process.exitCode = 1;
     return;
   }

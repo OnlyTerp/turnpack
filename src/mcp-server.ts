@@ -1,9 +1,17 @@
+import fs from "node:fs";
 import { pathToFileURL } from "node:url";
-import { applyClientRoots, createRootPolicy, resolveToolRoot, type RootPolicy } from "./roots.js";
+import { describeChecks, detectChecks } from "./checks.js";
+import {
+  applyClientRoots,
+  configScope,
+  createRootPolicy,
+  resolveToolRoot,
+  type RootPolicy,
+} from "./roots.js";
 import { runBatch, type BatchArgs } from "./tools/batch.js";
 import { runPack, type ClientContext, type PackArgs } from "./tools/pack.js";
 import { runShip, type ShipArgs } from "./tools/ship.js";
-import { isRecord } from "./validate.js";
+import { isRecord, pick, ROOT_KEYS } from "./validate.js";
 import { VERSION } from "./version.js";
 
 export interface McpToolDefinition {
@@ -17,50 +25,83 @@ export interface McpToolDefinition {
     idempotentHint?: boolean;
     openWorldHint: boolean;
   };
+  _meta?: Record<string, unknown>;
 }
 
 /**
+ * Claude Code defers MCP tools by default: the model sees their names and has to search for a
+ * tool before it can call it. That extra step is paid on every first use, and it is the reason
+ * a model with Turnpack installed still reaches for its built-in read and edit tools. This
+ * flag, documented by Claude Code for server authors, asks for a tool to be loaded with the
+ * session instead. Three tools and about 1,200 tokens is a schema small enough to justify it.
+ * Other clients ignore the field.
+ */
+const LOAD_UPFRONT = { "anthropic/alwaysLoad": true };
+
+/**
  * Sent once in the `initialize` result. Clients place it in the model's context, which is how
- * the model learns when these tools beat its built-in ones. It is static text, so it never
- * disturbs prompt caching, and it is the only steering Turnpack does: no rules files are edited.
+ * the model learns when these tools beat its built-in ones. The text below is fixed; the only
+ * thing ever added to it is one line about the project the server was started in (its check
+ * command, or that it has no project), so it is the same on every session in a project and
+ * never disturbs prompt caching. No rules files are edited.
  */
 export const SERVER_INSTRUCTIONS = [
   "Turnpack folds multi-step file work into single calls.",
-  "- Need 2+ files, or a search plus the files it finds? Call `pack` once (query + files + globs + git_status together) instead of separate read/search calls.",
-  "- Changing 2+ files, or making any change that must pass a test or typecheck? Call `ship` once with every edit and a `verify` command. If verify fails, all files are restored automatically and you get the failing output: fix the edit and ship again.",
+  "- Need 2+ files, or a search plus the code around what it finds? Call `pack` once (query + context + files + globs + git_status together) instead of separate read/search calls.",
+  "- Changing 2+ files, or making any change that must pass a test or typecheck? Call `ship` once with every edit (search/replace `edits`, or one `patch` in apply_patch or unified-diff format) and a `verify` command. If verify fails, all files are restored automatically and you get the failing output: fix the edit and ship again.",
   "- Need a fact about many files (counts, outlines, which files match)? Call `batch` with a short script and return only the summary.",
   "For one small edit to a file you already have open, your normal edit tool is fine.",
 ].join("\n");
 
+const NO_PROJECT_LINE =
+  "This server was not started inside a project: pass `root` (the absolute path of the project directory) on every call.";
+
+/** The instructions for a server with this workspace policy. See SERVER_INSTRUCTIONS. */
+export function serverInstructions(policy?: RootPolicy, clientReportsRoots = false): string {
+  if (!policy) return SERVER_INSTRUCTIONS;
+  if (policy.source === "none") {
+    // A client that reports its folders is about to supply one.
+    return clientReportsRoots ? SERVER_INSTRUCTIONS : `${SERVER_INSTRUCTIONS}\n${NO_PROJECT_LINE}`;
+  }
+  const root = policy.roots[0];
+  let checks = "";
+  try {
+    checks = root ? describeChecks(detectChecks(root)) : "";
+  } catch {
+    checks = "";
+  }
+  return checks ? `${SERVER_INSTRUCTIONS}\n${checks} Use it as ship's verify.` : SERVER_INSTRUCTIONS;
+}
+
+const ROOT_IN_WORKSPACE = "Subdirectory of the workspace to work in (default: the workspace root).";
+const ROOT_REQUIRED =
+  "Absolute path of the project directory. Required on every call: this server was not told which project is open.";
+
+// The schemas use only `type`, `properties`, `items`, `required` and `description`. Unions
+// (`oneOf`, `anyOf`, a list of types) are left out on purpose: several model APIs drop or
+// reject them, and a tool whose schema is rewritten in transit is a tool that gets called
+// wrongly. The tools still accept the richer shapes when a model sends them.
 export const TOOLS: McpToolDefinition[] = [
   {
     name: "pack",
     description:
-      "Gather context in ONE call instead of several read/search calls: regex search, whole files, line ranges, symbols, glob listings and git status together. Use whenever you need 2+ files, or a search plus files. Output is size-capped; .env files and keys are redacted.",
+      "Read and search the project in ONE call instead of several: a regex search (with the lines around each hit if you ask), any number of files (whole, a line range, or one function), glob listings and git status together. Use it whenever you need 2+ files, or a search plus what it finds. Output is size-capped; .env files and keys are redacted.",
     annotations: { title: "Pack context", readOnlyHint: true, openWorldHint: false },
+    _meta: LOAD_UPFRONT,
     inputSchema: {
       type: "object",
       properties: {
-        query: { type: "string", description: "Regex (or literal) to search for across the repo." },
+        query: { type: "string", description: "Regex to search the repo for (plain text with literal: true)." },
         literal: { type: "boolean", description: "Treat query as plain text." },
+        context: {
+          type: "integer",
+          description: "Lines of code to show around each search hit (0-30), so the matches need no second read.",
+        },
         files: {
           type: "array",
-          description: "Files to read: 'src/app.ts', 'src/app.ts:10-80', or {path, start_line, end_line, symbol}.",
-          items: {
-            oneOf: [
-              { type: "string" },
-              {
-                type: "object",
-                properties: {
-                  path: { type: "string" },
-                  start_line: { type: "integer" },
-                  end_line: { type: "integer" },
-                  symbol: { type: "string", description: "Function/class name to slice out." },
-                },
-                required: ["path"],
-              },
-            ],
-          },
+          items: { type: "string" },
+          description:
+            "Files to read: 'src/app.ts' (whole), 'src/app.ts:10-80' (lines), 'src/app.ts#handleLogin' (one function or class), 'src/app.ts#' (outline).",
         },
         globs: { type: "array", items: { type: "string" }, description: "Globs to list, e.g. 'src/**/*.ts'." },
         git_status: { type: "boolean", description: "Include git status." },
@@ -68,14 +109,14 @@ export const TOOLS: McpToolDefinition[] = [
         max_bytes: { type: "integer", description: "Inline size cap, 4000-44000; overflow goes to files." },
         inline_only: { type: "boolean", description: "Never spill to files." },
         allow_secrets: { type: "boolean", description: "Show secret files. Only when the user asked." },
-        root: { type: "string", description: "Subdirectory of the workspace (default: workspace root)." },
+        root: { type: "string", description: ROOT_IN_WORKSPACE },
       },
     },
   },
   {
     name: "ship",
     description:
-      "Apply a multi-file change and test it in ONE call. All edits are validated first (nothing is written if any anchor is missing or ambiguous), then the verify command(s) run. If verify fails, every file is restored byte-for-byte and the failing output is returned. Prefer over separate edit calls plus a test run whenever a change spans files or must pass a check.",
+      "Edit files and run the tests in ONE call. Applies search/replace edits or a patch, new files, moves and deletes across any number of files, then runs your verify command(s). If verify fails, every file is restored byte-for-byte and you get the failing output. If an edit cannot be applied, nothing is written and the reply shows the nearest text. Prefer it over separate edit calls (or apply_patch) plus a test run whenever a change spans files or must pass a check.",
     annotations: {
       title: "Ship verified edits",
       readOnlyHint: false,
@@ -83,12 +124,14 @@ export const TOOLS: McpToolDefinition[] = [
       idempotentHint: false,
       openWorldHint: true,
     },
+    _meta: LOAD_UPFRONT,
     inputSchema: {
       type: "object",
       properties: {
         edits: {
           type: "array",
-          description: "Exact search/replace edits. search must match once unless replace_all.",
+          description:
+            "Search/replace edits. search is text copied from the file and must identify one place, unless replace_all. Several edits may name the same file.",
           items: {
             type: "object",
             properties: {
@@ -96,22 +139,14 @@ export const TOOLS: McpToolDefinition[] = [
               search: { type: "string" },
               replace: { type: "string" },
               replace_all: { type: "boolean" },
-              changes: {
-                type: "array",
-                description: "Several replacements in this file, applied in order.",
-                items: {
-                  type: "object",
-                  properties: {
-                    search: { type: "string" },
-                    replace: { type: "string" },
-                    replace_all: { type: "boolean" },
-                  },
-                  required: ["search", "replace"],
-                },
-              },
             },
-            required: ["path"],
+            required: ["path", "search", "replace"],
           },
+        },
+        patch: {
+          type: "string",
+          description:
+            "Instead of edits: one patch for any number of files, in apply_patch format (*** Begin Patch / *** Update File: path / @@ / lines starting with space, - or +) or as a unified diff.",
         },
         writes: {
           type: "array",
@@ -122,15 +157,25 @@ export const TOOLS: McpToolDefinition[] = [
             required: ["path", "content"],
           },
         },
+        moves: {
+          type: "array",
+          description: "Rename or move files. Edits in the same call use the new path.",
+          items: {
+            type: "object",
+            properties: { from: { type: "string" }, to: { type: "string" } },
+            required: ["from", "to"],
+          },
+        },
         deletes: { type: "array", items: { type: "string" }, description: "Files to delete." },
         verify: {
-          oneOf: [{ type: "string" }, { type: "array", items: { type: "string" } }],
-          description: "Command(s) that must exit 0, e.g. 'npm test'. Omit only for untestable changes.",
+          type: "array",
+          items: { type: "string" },
+          description: 'Commands that must each exit 0, run in order, e.g. ["npm test"]. Omit only for untestable changes.',
         },
-        timeout_ms: { type: "integer", description: "Per-command verify timeout (default 60000)." },
+        timeout_ms: { type: "integer", description: "Per-command verify timeout (default 60000, max 300000)." },
         rollback_on_fail: { type: "boolean", description: "Restore files if verify fails (default true)." },
         allow_secrets: { type: "boolean", description: "Allow changing secret files." },
-        cwd: { type: "string", description: "Subdirectory of the workspace (default: workspace root)." },
+        root: { type: "string", description: ROOT_IN_WORKSPACE },
       },
     },
   },
@@ -139,34 +184,77 @@ export const TOOLS: McpToolDefinition[] = [
     description:
       "Run a short read-only JS script over the repo to answer a question that would otherwise take many reads (count usages, outline every file, filter files by content). The script gets ctx.files(glob), ctx.read(path, start, end), ctx.outline(path), await ctx.grep(pattern), await ctx.gitStatus(). Return a compact summary, not raw file contents. It cannot write files or run commands.",
     annotations: { title: "Batch read-only script", readOnlyHint: true, openWorldHint: false },
+    _meta: LOAD_UPFRONT,
     inputSchema: {
       type: "object",
       properties: {
         code: { type: "string", description: "JS body (may use await/return) or async (ctx) => ..." },
         timeout_ms: { type: "integer", description: "Time limit in ms (default 5000, max 30000)." },
         allow_secrets: { type: "boolean", description: "Include secret files. Only when the user asked." },
-        cwd: { type: "string", description: "Subdirectory of the workspace (default: workspace root)." },
+        root: { type: "string", description: ROOT_IN_WORKSPACE },
       },
       required: ["code"],
     },
   },
 ];
 
-/** `batch` stops being read-only the moment the operator enables ctx.exec; say so truthfully. */
-export function listTools(): McpToolDefinition[] {
-  if (process.env.TURNPACK_ALLOW_EXEC !== "1") return TOOLS;
-  return TOOLS.map((tool) =>
-    tool.name === "batch"
-      ? {
-          ...tool,
-          description: tool.description.replace(
-            "It cannot write files or run commands.",
-            "ctx.exec(command) is enabled on this server and runs shell commands.",
-          ),
-          annotations: { ...tool.annotations, readOnlyHint: false, destructiveHint: true, openWorldHint: true },
-        }
-      : tool,
-  );
+/**
+ * The tool list for a server in this state. Two things can change it:
+ * - `batch` stops being read-only the moment the operator enables ctx.exec, and says so.
+ * - A server with no workspace needs `root` on every call, so there it is required.
+ */
+export function listTools(policy?: RootPolicy): McpToolDefinition[] {
+  const execEnabled = process.env.TURNPACK_ALLOW_EXEC === "1";
+  const needsRoot = policy?.source === "none";
+  if (!execEnabled && !needsRoot) return TOOLS;
+  return TOOLS.map((tool) => {
+    let next: McpToolDefinition = tool;
+    if (execEnabled && tool.name === "batch") {
+      next = {
+        ...next,
+        description: next.description.replace(
+          "It cannot write files or run commands.",
+          "ctx.exec(command) is enabled on this server and runs shell commands.",
+        ),
+        annotations: { ...next.annotations, readOnlyHint: false, destructiveHint: true, openWorldHint: true },
+      };
+    }
+    if (needsRoot) {
+      const schema = next.inputSchema as { properties: Record<string, unknown>; required?: string[] };
+      next = {
+        ...next,
+        inputSchema: {
+          ...schema,
+          properties: { ...schema.properties, root: { type: "string", description: ROOT_REQUIRED } },
+          required: [...(schema.required ?? []), "root"],
+        },
+      };
+    }
+    return next;
+  });
+}
+
+/**
+ * `TURNPACK_LOG=<file>` makes the server append one line per tool call: the time, the tool, how
+ * long it took, whether it succeeded, and the size of the reply. It answers "is my agent using
+ * these tools, or still reading files one at a time?" without watching a session. It is off
+ * unless set, it stays on this machine, and it never records arguments, paths or file contents.
+ */
+function logCall(tool: string, startedAt: number, text: string, isError: boolean): void {
+  const logPath = process.env.TURNPACK_LOG?.trim();
+  if (!logPath) return;
+  const status = tool === "ship" ? /^[A-Z_]{6,}/.exec(text)?.[0] : undefined;
+  const line = JSON.stringify({
+    t: new Date().toISOString(),
+    tool,
+    ms: Math.round(performance.now() - startedAt),
+    ok: !isError,
+    bytes: Buffer.byteLength(text, "utf8"),
+    ...(status ? { status } : {}),
+  });
+  fs.appendFile(logPath, `${line}\n`, () => {
+    // A log that cannot be written must never get in the way of the call.
+  });
 }
 
 export function resolveClientContext(clientNameRaw?: string): ClientContext {
@@ -235,6 +323,7 @@ export function startMcpServer(options: McpServerOptions = {}): void {
   const output = options.output ?? process.stdout;
 
   let policy: RootPolicy;
+  let protocolVersion = "";
   try {
     policy = createRootPolicy(options.cwd);
   } catch (err) {
@@ -309,6 +398,27 @@ export function startMcpServer(options: McpServerOptions = {}): void {
       replyError(id, -32602, `Unknown tool: ${toolName}`);
       return;
     }
+    const startedAt = performance.now();
+    try {
+      await runTool(id, toolName, params, startedAt);
+    } catch (err) {
+      // Tool failures are results the model can read and react to, not protocol errors.
+      const text = `Error: ${err instanceof Error ? err.message : String(err)}`;
+      logCall(toolName, startedAt, text, true);
+      toolText(id, text, true);
+    }
+  };
+
+  const runTool = async (
+    id: string | number,
+    toolName: "pack" | "ship" | "batch",
+    params: Record<string, unknown>,
+    startedAt: number,
+  ): Promise<void> => {
+    const toolText = (callId: string | number, text: string, isError: boolean): void => {
+      logCall(toolName, startedAt, text, isError);
+      reply(callId, { content: [{ type: "text", text }], isError });
+    };
     const rawArgs = params.arguments ?? {};
     if (!isRecord(rawArgs)) {
       toolText(id, `Error: ${toolName} arguments must be a JSON object`, true);
@@ -319,26 +429,60 @@ export function startMcpServer(options: McpServerOptions = {}): void {
     // already confined to the folders the client named.
     await rootsSettled;
 
+    // The directory is decided here, from the policy. Whatever name the call used for it is
+    // replaced by the one answer, so no alias can reach a tool unchecked.
+    const root = resolveToolRoot(policy, pick(rawArgs, ROOT_KEYS));
+    const args: Record<string, unknown> = { ...rawArgs };
+    for (const key of ROOT_KEYS) delete args[key];
+    args.root = root;
+
     if (toolName === "pack") {
-      const root = resolveToolRoot(policy, rawArgs.root);
-      const text = await runPack({ ...rawArgs, root } as PackArgs, detectedClient);
-      toolText(id, text, false);
+      toolText(id, await runPack(args as PackArgs, detectedClient), false);
       return;
     }
 
     if (toolName === "ship") {
-      const cwd = resolveToolRoot(policy, rawArgs.cwd);
-      const workspaceRoots = policy.roots;
-      const run = shipQueue.then(() => runShip({ ...rawArgs, cwd } as ShipArgs, { workspaceRoots }));
+      // A verify command can run for minutes. Clients that asked for progress get a line when
+      // each command starts and a heartbeat while it runs, so the wait is visibly alive.
+      const meta = isRecord(params._meta) ? params._meta : {};
+      const token = meta.progressToken;
+      const wantsProgress = typeof token === "string" || typeof token === "number";
+      let stage = "checking the edits";
+      let stageStartedAt = Date.now();
+      let ticks = 0;
+      const report = (message: string): void => {
+        if (!wantsProgress) return;
+        ticks += 1;
+        const progress: Record<string, unknown> = { progressToken: token, progress: ticks };
+        // `message` joined the protocol in 2025-03-26; older clients get the bare counter.
+        if (protocolVersion !== "2024-11-05") progress.message = message;
+        write({ jsonrpc: "2.0", method: "notifications/progress", params: progress });
+      };
+      const workspaceRoots = configScope(policy, root);
+      const run = shipQueue.then(async () => {
+        const beat = wantsProgress
+          ? setInterval(() => report(`${stage} (${Math.round((Date.now() - stageStartedAt) / 1000)}s)`), 5000)
+          : undefined;
+        try {
+          return await runShip(args as ShipArgs, {
+            workspaceRoots,
+            onProgress: (message) => {
+              stage = message;
+              stageStartedAt = Date.now();
+              report(message);
+            },
+          });
+        } finally {
+          clearInterval(beat);
+        }
+      });
       shipQueue = run.catch(() => undefined);
       const res = await run;
       toolText(id, res.summary, res.status !== "SHIPPED_AND_VERIFIED" && res.status !== "APPLIED_NO_VERIFY");
       return;
     }
 
-    const cwd = resolveToolRoot(policy, rawArgs.cwd);
-    const text = await runBatch({ ...rawArgs, cwd } as unknown as BatchArgs);
-    toolText(id, text, false);
+    toolText(id, await runBatch(args as unknown as BatchArgs), false);
   };
 
   const handleRequest = async (id: string | number, msg: JsonRpcMessage): Promise<void> => {
@@ -347,17 +491,23 @@ export function startMcpServer(options: McpServerOptions = {}): void {
       switch (msg.method) {
         case "initialize": {
           const clientInfo = isRecord(params.clientInfo) ? params.clientInfo : {};
-          detectedClient = resolveClientContext(
-            typeof clientInfo.name === "string" ? clientInfo.name : undefined,
-          );
+          const clientName = typeof clientInfo.name === "string" ? clientInfo.name : "";
+          detectedClient = resolveClientContext(clientName || undefined);
+          // CLAUDE_PROJECT_DIR names the project of the Claude Code session that set it. Any
+          // other app started from that session's terminal inherits the variable, and for that
+          // app it names the wrong folder. So it is believed only when Claude is the client.
+          if (policy.source === "project" && !/claude/i.test(clientName)) {
+            policy = createRootPolicy(options.cwd, { ignoreProjectEnv: true });
+          }
           const capabilities = isRecord(params.capabilities) ? params.capabilities : {};
           clientHasRoots = capabilities.roots !== undefined && capabilities.roots !== null;
           const requested = typeof params.protocolVersion === "string" ? params.protocolVersion : "";
+          protocolVersion = SUPPORTED_PROTOCOLS.includes(requested) ? requested : FALLBACK_PROTOCOL;
           reply(id, {
-            protocolVersion: SUPPORTED_PROTOCOLS.includes(requested) ? requested : FALLBACK_PROTOCOL,
+            protocolVersion,
             capabilities: { tools: {} },
             serverInfo: { name: "turnpack", version: VERSION },
-            instructions: SERVER_INSTRUCTIONS,
+            instructions: serverInstructions(policy, clientHasRoots),
           });
           return;
         }
@@ -365,7 +515,10 @@ export function startMcpServer(options: McpServerOptions = {}): void {
           reply(id, {});
           return;
         case "tools/list":
-          reply(id, { tools: listTools() });
+          // With no workspace yet, wait for the folders the client was just asked for: whether
+          // `root` is required depends on the answer.
+          if (policy.source === "none" && clientHasRoots) await rootsSettled;
+          reply(id, { tools: listTools(policy) });
           return;
         case "resources/list":
           reply(id, { resources: [] });

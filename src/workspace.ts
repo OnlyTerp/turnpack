@@ -182,6 +182,59 @@ export function walkWorkspaceFiles(
   return { files, secretFiles, truncated };
 }
 
+/** Edit distance between two short names, given up on once it passes `limit`. */
+function editDistance(a: string, b: string, limit: number): number {
+  if (Math.abs(a.length - b.length) > limit) return limit + 1;
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i];
+    let best = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      const value = Math.min((prev[j] ?? 0) + 1, (row[j - 1] ?? 0) + 1, (prev[j - 1] ?? 0) + cost);
+      row.push(value);
+      if (value < best) best = value;
+    }
+    if (best > limit) return limit + 1;
+    prev = row;
+  }
+  return prev[b.length] ?? limit + 1;
+}
+
+/** For a path that does not exist: up to three files in the workspace it was probably meant to be. */
+export function suggestPaths(workspaceRoot: string, relPath: string): string {
+  const wanted = relPath.replace(/\\/g, "/").split("/").pop()?.toLowerCase() ?? "";
+  const stem = wanted.replace(/\.[^.]+$/, "");
+  if (!stem) return "";
+  let files: string[];
+  try {
+    files = walkWorkspaceFiles(workspaceRoot, { maxFiles: 5000 }).files;
+  } catch {
+    return "";
+  }
+  const ranked = files
+    .map((rel) => {
+      const base = rel.split("/").pop()?.toLowerCase() ?? "";
+      const baseStem = base.replace(/\.[^.]+$/, "");
+      // The same name elsewhere, the same name with another extension, a near-miss spelling.
+      const score =
+        base === wanted
+          ? 4
+          : baseStem === stem
+            ? 3
+            : stem.length >= 4 && baseStem.length <= 40 && editDistance(baseStem, stem, 2) <= 2
+              ? 2
+              : stem.length >= 4 && base.includes(stem)
+                ? 1
+                : 0;
+      return { rel, score };
+    })
+    .filter((entry) => entry.score > 0 && !isSecretPath(entry.rel, workspaceRoot))
+    .sort((a, b) => b.score - a.score || a.rel.length - b.rel.length)
+    .slice(0, 3);
+  return ranked.length > 0 ? ` Did you mean ${ranked.map((entry) => `"${entry.rel}"`).join(" or ")}?` : "";
+}
+
 const MAX_HIT_TEXT = 260;
 
 function parseRgOutput(

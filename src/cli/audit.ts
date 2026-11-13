@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { appTargets } from "./installer.js";
 
 export interface AuditFinding {
   client: string;
@@ -74,15 +75,13 @@ export function runAudit(argv: string[]): AuditReport {
     }
   }
 
-  const findings: AuditFinding[] = [
-    auditJsonFile("Claude Code", path.join(homeDir, ".claude.json"), "mcpServers"),
-    auditTomlFile("Codex CLI", path.join(homeDir, ".codex", "config.toml")),
-    auditJsonFile("OMP", path.join(homeDir, ".omp", "agent", "mcp.json"), "mcpServers"),
-    auditJsonFile("Cursor", path.join(homeDir, ".cursor", "mcp.json"), "mcpServers"),
-    auditJsonFile("Gemini CLI", path.join(homeDir, ".gemini", "settings.json"), "mcpServers"),
-    auditJsonFile("OpenCode", path.join(homeDir, ".config", "opencode", "opencode.json"), "mcp"),
-    auditTomlFile("Grok CLI", path.join(homeDir, ".grok", "config.toml")),
-  ];
+  // The same list of apps init writes to, so the two can never disagree about where a config is.
+  const findings: AuditFinding[] = appTargets(homeDir).map((target) => {
+    const client = target.client.replace(/ \(.*\)$/, "").replace(/ and .*$/, "");
+    return target.format === "toml"
+      ? auditTomlFile(client, target.configPath)
+      : auditJsonFile(client, target.configPath, target.containerKey);
+  });
 
   const totalConfiguredServers = findings.reduce((sum, f) => sum + f.serverCount, 0);
   const report: AuditReport = { homeDir, findings, totalConfiguredServers };
@@ -98,7 +97,7 @@ export function runAudit(argv: string[]): AuditReport {
     if (!item.exists) continue;
     const tp = item.hasTurnpack ? "turnpack=YES" : "turnpack=no ";
     process.stdout.write(
-      `  ${item.client.padEnd(13)} ${String(item.serverCount).padStart(2)} MCP server(s)  ${tp}  ${item.filePath}\n`,
+      `  ${item.client.padEnd(14)} ${String(item.serverCount).padStart(2)} MCP server(s)  ${tp}  ${item.filePath}\n`,
     );
     for (const note of item.notes) {
       process.stdout.write(`    ! ${note}\n`);

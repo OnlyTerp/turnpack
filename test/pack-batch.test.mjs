@@ -90,6 +90,59 @@ describe("pack and read-only batch", () => {
     assert.match(out, /SYMBOL NOT FOUND: available: Server:3, Listen:7, main:11/);
   });
 
+  it("pack returns the code around each search hit, so finding and reading are one call", async () => {
+    fs.writeFileSync(
+      path.join(repoDir, "src", "cart.ts"),
+      ["import { add } from './math';", "", "export function total(items: number[]): number {", "  let sum = 0;", "  for (const n of items) sum = add(sum, n);", "  return sum;", "}", "", "export const EMPTY = total([]);"].join("\n"),
+    );
+    const out = await runPack({ root: repoDir, query: "add\\(", context: 1, inline_only: true });
+
+    assert.match(out, /## SEARCH "add\\\(" \(2 hits in 2 file\(s\), engine=\w+, 1 line\(s\) of context, hits marked >\)/);
+    assert.match(out, /### src\/cart\.ts\n 4 \|   let sum = 0;\n>5 \|   for \(const n of items\) sum = add\(sum, n\);\n 6 \|   return sum;/);
+    assert.match(out, /### src\/math\.ts\n>1 \| export function add\(a: number, b: number\): number \{\n 2 \|   return a \+ b;/);
+
+    // Neighbouring windows merge, distant ones are separated, and secrets stay out.
+    const wide = await runPack({ root: repoDir, pattern: "total|API_TOKEN", context: 2, inline_only: true });
+    assert.match(wide, />3 \| export function total[\s\S]*   \.\.\.\n 7 \| \}\n 8 \| \n>9 \| export const EMPTY/);
+    assert.equal(wide.includes("super_secret_do_not_leak"), false);
+    assert.match(wide, /REDACTED SECRET MATCHES in \.env/);
+    fs.rmSync(path.join(repoDir, "src", "cart.ts"));
+  });
+
+  it("pack reads the string forms of a file: lines, one symbol, an outline", async () => {
+    const out = await runPack({
+      root: repoDir,
+      files: ["src/math.ts#multiply", "src/math.ts#", "src/math.ts#L1-L2", "src/math.ts:6", "src/maths.ts", "src/math.ts#nope"],
+      inline_only: true,
+    });
+    assert.match(out, /### SYMBOL: src\/math\.ts :: function multiply \(L5-7\/7\)/);
+    assert.match(out, /### OUTLINE: src\/math\.ts \(7 lines, 2 symbols\)\nfunction add \(L1-3\)\nfunction multiply \(L5-7\)/);
+    assert.match(out, /### FILE: src\/math\.ts \(L1-2\/7\)\n1 \| export function add/);
+    assert.match(out, /\[NOT FOUND: src\/maths\.ts\. Did you mean "src\/math\.ts"\?\]/);
+    assert.match(out, /\[SYMBOL NOT FOUND: available: add:1, multiply:5\]/);
+
+    // A directory is listed rather than skipped, without the secret files in it.
+    const dir = await runPack({ root: repoDir, files: ["src", "."], inline_only: true });
+    assert.match(dir, /### DIRECTORY: src \(\d+ entries\)\n[\s\S]*math\.ts/);
+    assert.match(dir, /### DIRECTORY: \. \(\d+ entries\)\n\.env\.example\nsrc\//);
+    assert.equal(/^\.env$/m.test(dir), false);
+
+    // A file whose real name contains "#" or ":<digits>" is read as that file.
+    fs.writeFileSync(path.join(repoDir, "src", "notes#draft"), "hash-in-name\n");
+    const literal = await runPack({ root: repoDir, path: "src/notes#draft", inline_only: true });
+    assert.match(literal, /### FILE: src\/notes#draft \(L1-2\/2\)\n1 \| hash-in-name/);
+    fs.rmSync(path.join(repoDir, "src", "notes#draft"));
+  });
+
+  it("pack says what lies below the part of a long file it showed, and names arguments it ignored", async () => {
+    const body = Array.from({ length: 230 }, (_, i) => `// filler ${i}`).join("\n");
+    fs.writeFileSync(path.join(repoDir, "src", "long.ts"), `${body}\nexport function tail(): number {\n  return 1;\n}\n`);
+    const out = await runPack({ root: repoDir, files: ["src/long.ts"], inline_only: true, patterns: ["x", "y"] });
+    assert.match(out, /\[\.\.\. 34 more lines; request "src\/long\.ts:201-234" for the rest\. Further down: tail L231-233\]/);
+    assert.match(out, /\[Ignored unknown argument\(s\) "patterns": pack takes query, context, files, globs and git_status\]/);
+    fs.rmSync(path.join(repoDir, "src", "long.ts"));
+  });
+
   it("pack allows explicit allow_secrets override when intentional", async () => {
     const out = await runPack({
       root: repoDir,

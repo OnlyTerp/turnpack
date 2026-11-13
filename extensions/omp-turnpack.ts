@@ -27,9 +27,10 @@ export default function turnpackExtension(pi: OmpApi): void {
 
   pi.on("tool_result", (event, ctx) => {
     const name = String(event.toolName || "");
-    if (name === "read" || name === "grep" || name === "edit") {
+    // The single-file tools. `eval` is left out: one eval is already a batch.
+    if (["read", "grep", "glob", "find", "edit", "write"].includes(name)) {
       microBurst += 1;
-    } else if (name.includes("pack") || name.includes("ship") || name.includes("batch")) {
+    } else if (name.includes("turnpack") || /(^|_)(pack|ship|batch)$/.test(name)) {
       microBurst = 0;
     }
 

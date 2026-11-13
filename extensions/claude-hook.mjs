@@ -3,8 +3,11 @@
  * Optional PreToolUse hook for Claude Code. Not installed by `turnpack init`; see
  * docs/steering.md for the settings snippet if you want it.
  *
- * What it does: when the model makes several single-file calls in a row (Read, Grep, Glob,
- * Edit) inside a short window, it adds one line of context suggesting `pack` or `ship`.
+ * What it does: when the model makes several single-file calls in a row inside a short window,
+ * it adds one line of context suggesting `pack` or `ship`. A single-file call is Read, Grep,
+ * Glob, Edit or Write, or a shell command that reads or searches (rg, grep, cat, ls and the
+ * like). The shell counts because on macOS, Linux and WSL Claude Code has no Grep or Glob tool
+ * by default and searches through Bash.
  *
  * Contract:
  * - Silent on ordinary tool calls: no output, exit 0, so it adds nothing to the conversation.
@@ -19,7 +22,11 @@ import path from "node:path";
 
 const WINDOW_MS = 30000;
 const BURST_THRESHOLD = 4;
-const SINGLE_FILE_TOOLS = new Set(["Read", "Grep", "Glob", "Edit"]);
+const SINGLE_FILE_TOOLS = new Set(["Read", "Grep", "Glob", "Edit", "Write"]);
+const SHELL_TOOLS = new Set(["Bash", "PowerShell"]);
+// A shell command that only looks at files. An optional leading "cd dir &&" is allowed.
+const SHELL_LOOK =
+  /^\s*(?:cd\s+\S+\s*(?:&&|;)\s*)?(?:rg|grep|egrep|fgrep|git\s+grep|ag|ack|find|fd|ls|dir|tree|cat|bat|head|tail|sed\s+-n|wc|type|get-content|gc|select-string|sls|get-childitem|gci)\b/i;
 
 let raw = "";
 process.stdin.setEncoding("utf8");
@@ -48,8 +55,11 @@ process.stdin.on("end", () => {
     // First call of the session.
   }
 
+  const command = typeof payload.tool_input?.command === "string" ? payload.tool_input.command : "";
+  const singleFile = SINGLE_FILE_TOOLS.has(tool) || (SHELL_TOOLS.has(tool) && SHELL_LOOK.test(command));
+
   let speak = false;
-  if (SINGLE_FILE_TOOLS.has(tool)) {
+  if (singleFile) {
     state.count = now - state.lastAt <= WINDOW_MS ? state.count + 1 : 1;
     state.lastAt = now;
     if (state.count >= BURST_THRESHOLD) {
@@ -72,7 +82,7 @@ process.stdin.on("end", () => {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
           additionalContext:
-            "Several single-file calls in a row. If more are coming, mcp__turnpack__pack can read and search many files in one call, and mcp__turnpack__ship can apply a multi-file edit and run the tests in one call.",
+            "Several single-file calls in a row. If more are coming: mcp__turnpack__pack returns a search with the code around each hit, plus any files, in one call, and mcp__turnpack__ship applies a multi-file edit, runs the tests, and undoes the edit if they fail.",
         },
       }),
     );

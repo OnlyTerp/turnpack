@@ -6,7 +6,7 @@ import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import { runPack } from "../dist/index.js";
-import { applyClientRoots, createRootPolicy, resolveToolRoot } from "../dist/roots.js";
+import { applyClientRoots, configScope, createRootPolicy, isBroadDirectory, resolveToolRoot } from "../dist/roots.js";
 import { removeDir, trySymlink } from "./helpers.mjs";
 import {
   findShortNameAlias,
@@ -294,6 +294,35 @@ describe("security & confinement", () => {
       assert.throws(() => resolveToolRoot(policy, escape), /ERR_ROOT_OUTSIDE_WORKSPACE/, escape);
     }
     assert.throws(() => resolveToolRoot(policy, 42), /must be a string/);
+  });
+
+  it("refuses to treat a home, system or credentials directory as a workspace", () => {
+    const home = os.homedir();
+    for (const broad of [home, path.parse(home).root, path.join(home, ".ssh"), path.join(home, ".aws", "sso")]) {
+      assert.equal(isBroadDirectory(broad), true, broad);
+    }
+    const systemDir = process.platform === "win32" ? process.env.SystemRoot : "/usr";
+    if (systemDir) assert.equal(isBroadDirectory(path.join(systemDir, "anything")), true);
+    // A temporary directory is a normal place for a checkout, wherever the system keeps it.
+    assert.equal(isBroadDirectory(repoDir), false);
+    assert.equal(isBroadDirectory(path.join(home, "code", "my-app")), false);
+
+    delete process.env.TURNPACK_ROOT;
+    delete process.env.CLAUDE_PROJECT_DIR;
+    const unanchored = createRootPolicy(home);
+    assert.deepEqual(unanchored, { roots: [], source: "none" });
+    assert.throws(() => resolveToolRoot(unanchored), /ERR_NO_WORKSPACE/);
+    assert.throws(() => resolveToolRoot(unanchored, "src"), /ERR_NO_WORKSPACE/);
+    assert.throws(() => resolveToolRoot(unanchored, home), /ERR_ROOT_TOO_BROAD/);
+    assert.throws(() => resolveToolRoot(unanchored, path.join(tmpRoot, "nope")), /ERR_ROOT_NOT_A_DIRECTORY/);
+    assert.throws(() => resolveToolRoot(unanchored, 42), /must be a string/);
+    const real = fs.realpathSync(repoDir);
+    assert.equal(resolveToolRoot(unanchored, repoDir), real);
+    // Every directory above a named project is in scope for its verify allowlist.
+    assert.deepEqual(configScope(unanchored, real), [path.parse(real).root]);
+    assert.deepEqual(configScope(createRootPolicy(repoDir), real), [real]);
+    // Folders reported by the client give such a server a normal workspace.
+    assert.equal(applyClientRoots(unanchored, [{ uri: pathToFileURL(repoDir).href }]).source, "client");
   });
 
   it("lets client roots replace the launch directory, but never an explicit TURNPACK_ROOT", () => {

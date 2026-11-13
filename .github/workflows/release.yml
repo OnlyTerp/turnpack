@@ -1,6 +1,7 @@
 name: Release
 
-# Publishes to npm when a version tag is pushed:
+# Publishes to npm when a version tag is pushed, and attaches the Claude Desktop bundle
+# (turnpack.mcpb) to a GitHub release for that tag:
 #   npm version patch && git push --follow-tags
 #
 # One-time setup: add an npm automation token as the repository secret NPM_TOKEN.
@@ -11,7 +12,7 @@ on:
     tags: ["v*.*.*"]
 
 permissions:
-  contents: read
+  contents: write # to create the GitHub release that carries turnpack.mcpb
   id-token: write
 
 jobs:
@@ -50,3 +51,12 @@ jobs:
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      # The file name carries no version, so this link always gives the newest bundle:
+      # https://github.com/OnlyTerp/turnpack/releases/latest/download/turnpack.mcpb
+      - name: Build the Claude Desktop bundle and attach it to the release
+        run: |
+          node scripts/build-mcpb.mjs
+          gh release create "$GITHUB_REF_NAME" release/turnpack.mcpb --title "$GITHUB_REF_NAME" --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
