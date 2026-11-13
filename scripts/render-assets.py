@@ -457,7 +457,11 @@ def render_demo_gif() -> None:
     # Reveal the demo two lines at a time (each tool prints a "did" line and a "->" result line).
     header = 2
     demo_reveals = [demo_lines[: header + 2 * n] for n in range(1, 6)] + [demo_lines]
-    scenes = [{"cmd": "$ npx turnpack demo", "lines": [], "hold": 4, "type": True}]
+    # Open on the finished demo, so a paused or not-yet-animating GIF still shows the result.
+    scenes = [
+        {"cmd": "$ npx turnpack demo", "lines": demo_lines, "hold": 14, "type": False},
+        {"cmd": "$ npx turnpack demo", "lines": [], "hold": 4, "type": True},
+    ]
     for shown in demo_reveals[:-1]:
         scenes.append({"cmd": "$ npx turnpack demo", "lines": shown, "hold": 9, "type": False})
     scenes.append({"cmd": "$ npx turnpack demo", "lines": demo_lines, "hold": 34, "type": False})

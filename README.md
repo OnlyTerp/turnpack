@@ -61,7 +61,11 @@ A rename that misses a call site is the classic way an agent breaks a build. Her
 ```json
 {
   "edits": [
-    { "path": "src/tax.js", "search": "export function calculateTax(amount)", "replace": "export function computeTax(amount)" }
+    {
+      "path": "src/tax.js",
+      "search": "export function calculateTax(amount)",
+      "replace": "export function computeTax(amount)"
+    }
   ],
   "verify": "npm test"
 }
@@ -87,8 +91,17 @@ The repo is exactly as it was, and the agent has the error that tells it what it
 ```json
 {
   "edits": [
-    { "path": "src/tax.js", "search": "export function calculateTax(amount)", "replace": "export function computeTax(amount)" },
-    { "path": "src/invoice.js", "search": "calculateTax", "replace": "computeTax", "replace_all": true }
+    {
+      "path": "src/tax.js",
+      "search": "export function calculateTax(amount)",
+      "replace": "export function computeTax(amount)"
+    },
+    {
+      "path": "src/invoice.js",
+      "search": "calculateTax",
+      "replace": "computeTax",
+      "replace_all": true
+    }
   ],
   "verify": "npm test"
 }
