@@ -25,6 +25,8 @@ The `root` / `cwd` argument on a tool call may select a directory inside that bo
 
 Inside the workspace, each path is resolved through symlinks before it is checked, including the existing part of a path that does not exist yet. That covers dangling links too: a symlink whose target does not exist yet is followed to where a write would land, so it cannot be used to create a file outside the workspace or inside `.git`. A symlink in your repo that points outside it cannot be read or written through. Windows drive letters and case-insensitivity are handled.
 
+Windows also gives a file more than one name. `.env::$DATA` is `.env` (NTFS stream syntax), `.git::$INDEX_ALLOCATION` is the `.git` directory, a name with a trailing dot or space can open the name without it, and `GIT~1` is the 8.3 short name of `.git`. Every fence below compares names, so on Windows all of these spellings are refused with `ERR_PATH_ALIAS` before any file is opened, in file paths and in `root` / `cwd` alike. Short names are detected by asking the file system for the path's real name.
+
 **Where it stops:** if your app starts the server somewhere broad (your home directory) and supplies none of the above, that directory is the workspace. Set `TURNPACK_ROOT` to be explicit.
 
 ### 2. Secret shield
@@ -75,10 +77,12 @@ The test suite deliberately breaks layer one and checks that layer two still ref
 - **Validate, then write.** Every edit, write and delete is checked in memory first. A missing anchor, an ambiguous anchor, a path outside the workspace or a secret file aborts the whole call with nothing written.
 - **Protected paths.** `ship` never modifies a `.turnpack.json` or anything inside a `.git` directory, at any depth, whatever the arguments, and whether the path is named directly or reached through a symlink. The first holds the verify allowlist; the second holds hooks and config that run on your next ordinary git command. Nested repositories and submodules are covered too.
 - **Byte-exact rollback.** Snapshots are taken before the first write and verified by SHA-256 when restored. Files that were created are removed, along with directories created for them. Deleted files come back with their original mode.
+- **Your changes are not rolled back with it.** Before restoring a file, `ship` checks that it still holds what `ship` wrote. If something else changed it while verify was running (you saved it in your editor), that file is left as it is, the rest are restored, and the reply is `FAILED_ROLLBACK_PARTIAL` with the file named.
 - **Interruptions.** If the server receives SIGINT, SIGTERM or SIGHUP while verify is running, it stops the verify command and restores the snapshots before exiting.
 - **No writing through links.** A write to a symlink lands on the file it resolves to, after that file has passed every check above. The link itself is never replaced, and a path that turns out to be a link at the moment of writing is refused.
 - **Text only.** Search-and-replace edits are refused on files that are not valid UTF-8, so bytes the edit never mentioned cannot be corrupted.
 - **One at a time.** Concurrent `ship` calls are queued.
+- **No waiting on leftovers.** `ship` returns when the verify command itself exits. A background process the command leaves behind (a dev server a test started and never stopped) does not hold the call, or the calls queued behind it, open.
 
 **The verify allowlist** is optional. Put this in `.turnpack.json` at the workspace root:
 
@@ -98,6 +102,8 @@ A command is accepted only if it equals an entry exactly. Extra arguments are re
 - The verify command runs your project's code, and `ship` edits your project's code, including the `test` script in `package.json` or a `Makefile` target, in the same call if it likes. The allowlist stops the agent from launching commands you did not approve, such as a deploy script or `curl … | sh`. It does not stop a hijacked agent from changing what an approved command does. For that you need review, or a sandbox around the whole agent.
 - Snapshots are held in memory. `kill -9`, a crash of the host, or a power cut during verify leaves the edits on disk.
 - Rollback restores files `ship` changed. It does not undo what the verify command did: a migrated database, generated files, a published package.
+- `ship` cannot tell your save from a verify command that rewrites the files being shipped (a formatter with `--fix`). Either way those files are left as they are and the reply says which.
+- A process the verify command leaves running is not stopped by `ship`. On a timeout the command and its process tree are killed, but a process that detached itself from that tree survives.
 - Without the allowlist, `verify` is an arbitrary shell command chosen by the model.
 
 ### 5. Everything else

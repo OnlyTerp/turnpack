@@ -16,8 +16,11 @@ First release.
 - **`batch` runs in its own process** under Node's permission model (no writes, no child processes, no workers, reads limited to the workspace), in a `node:vm` context that receives no host objects, with a minimal environment and a wall-clock limit enforced by the parent. The process does not sit in the workspace directory, so on Windows it never blocks that folder from being renamed or removed.
 - **Secret shield** for `.env*`, keys, registry and cloud credentials, Terraform state and similar files.
 - **Protected paths**: `ship` never writes a `.turnpack.json` or anything inside a `.git` directory, at any depth.
+- **Windows path aliases refused.** NTFS stream syntax (`.env::$DATA`, `.git::$INDEX_ALLOCATION`), names ending in a dot or a space, and 8.3 short names are rejected with `ERR_PATH_ALIAS` in every tool, in file paths and in `root` / `cwd`, so a protected or secret file cannot be reached under a second name.
 - **Verify allowlist** (optional, `.turnpack.json`): commands must match an entry exactly; an entry ending in ` *` opts in to plain trailing arguments. Shell operators are refused, an invalid config file blocks verify instead of disabling the list, and the list applies to every subdirectory a call can name as its `cwd`.
 - **Rollback on interruption**: SIGINT, SIGTERM and SIGHUP during verify restore the snapshots before the server exits.
+- **Rollback leaves your changes alone.** A file that something else changed while verify was running is not overwritten by the snapshot. The rest are restored and the reply is `FAILED_ROLLBACK_PARTIAL`, naming the file.
+- `ship` returns when the verify command exits, even if the command left a background process holding its output open, so one such command cannot stall the calls queued behind it.
 - Search patterns are passed to ripgrep as data, so a query that starts with `-` is searched for rather than parsed as an option.
 - Dangling symlinks are followed before the boundary checks, so a link to a not-yet-existing file cannot carry a write outside the workspace or into `.git`.
 - The built-in regex search and glob matching run in a worker thread with a deadline, so a pattern with catastrophic backtracking costs one call instead of freezing the server.

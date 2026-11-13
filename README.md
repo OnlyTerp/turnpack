@@ -20,6 +20,17 @@
 
 ---
 
+<!--
+LAUNCH FILM (not added yet, so nothing renders here).
+To add it: open this file in the editor on github.com, click the empty line under this comment, and drag
+turnpack-readme-720p.mp4 onto it. GitHub uploads the file and writes its URL on that line, and that URL
+renders as an inline video player. Then remove the comment markers around the caption below.
+-->
+
+<!--
+<p align="center"><sub>The same rename, done the usual way in nine turns and with Turnpack in three. The nine-turn loop illustrates one tool call per turn; the Turnpack calls and replies are the real ones from <a href="#what-it-looks-like">the example below</a>.</sub></p>
+-->
+
 AI coding agents work in round trips. Reading a file is one trip. A search is another. Editing two files and running the tests is three more. Each trip is a full model turn: a wait for the first token, then the tokens themselves. And when the tests fail at the end, your repo is left half-edited while the agent spends more turns backing out.
 
 Turnpack is a small local [MCP](https://modelcontextprotocol.io) server that gives the agent three tools to fold those trips together:
@@ -319,12 +330,12 @@ An agent that can edit files and run commands deserves fences. These are the one
 | **Workspace jail** | The workspace is fixed by the server, not by the model: `TURNPACK_ROOT`, else the folders your app reports over MCP `roots`, else `CLAUDE_PROJECT_DIR`, else the directory the server started in. A tool call can pick a subdirectory and nothing else. Symlinks are resolved before the check, including ones whose target does not exist yet. | If your app starts the server in your home directory and names no project, your home directory is the workspace. Set `TURNPACK_ROOT` to be explicit. |
 | **Secret shield** | `.env*`, private keys, `.npmrc`, cloud credentials, Terraform state and [similar files](SECURITY.md) are redacted from `pack` and `batch` and refused by `ship`. | It matches file names, not contents, and the agent can pass `allow_secrets`. It prevents accidents; it is not a vault. |
 | **Read-only `batch`** | The script runs in a separate process started under Node's permission model: no file writes, no child processes, no workers, reads limited to the workspace. It is handed no host objects and none of your environment variables, and it is killed at its time limit. | Node's permission model does not restrict network access on Node 22. `TURNPACK_ALLOW_EXEC=1` turns `ctx.exec` on and the read-only promise off. |
-| **Protected paths** | `ship` never writes a `.turnpack.json` or anything inside a `.git` directory, at any depth, so an edit cannot switch off the allowlist or plant a git hook. | |
+| **Protected paths** | `ship` never writes a `.turnpack.json` or anything inside a `.git` directory, at any depth, so an edit cannot switch off the allowlist or plant a git hook. On Windows the other spellings of those names (`.git::$INDEX_ALLOCATION`, `.turnpack.json::$DATA`, a trailing dot or space, 8.3 short names) are refused in every tool, so they cannot be used to reach a protected or secret file under a second name. | |
 | **Verify allowlist** | Optional. With `{"enforceVerifyAllowlist": true, "allowedVerify": ["npm test"]}` in `.turnpack.json` at the workspace root, `ship` runs only those exact commands, whichever subdirectory a call names. Extra arguments are refused unless an entry opts in with a trailing ` *`. A broken config file blocks verify rather than disabling the list. | The command runs your project's code, and `ship` can edit that code, including the test script itself. It stops unapproved commands from being launched; it does not stop a hijacked agent from changing what an approved one does. |
-| **Rollback** | Byte-exact snapshots taken before the first write, restored when verify fails or times out, and when the server receives SIGINT or SIGTERM mid-verify. New files and the directories created for them are removed. | Snapshots live in memory, so `kill -9` or a power cut mid-verify leaves the edits in place. Side effects of the verify command itself (a migrated database, generated files) are not undone. Keep using git. |
+| **Rollback** | Byte-exact snapshots taken before the first write, restored when verify fails or times out, and when the server receives SIGINT or SIGTERM mid-verify. New files and the directories created for them are removed. A file that something else changed while verify was running (you saved it in your editor) is left as it is and reported, never overwritten. | Snapshots live in memory, so `kill -9` or a power cut mid-verify leaves the edits in place. Side effects of the verify command itself (a migrated database, generated files) are not undone. `ship` cannot tell your save from a verify command that rewrites the files being shipped (a formatter with `--fix`); either way those files are left and the status is `FAILED_ROLLBACK_PARTIAL`. Keep using git. |
 | **Zero dependencies** | `"dependencies": {}`. The whole server is the TypeScript in `src/`. | |
 
-Each fence has tests that attack it: sandbox escapes, path traversal, symlink escapes, allowlist smuggling, argument injection, runaway regexes, rollback under a kill signal. They are in [`test/`](test), and `npx turnpack doctor` re-checks the main ones on your machine. The full threat model is in [SECURITY.md](SECURITY.md).
+Each fence has tests that attack it: sandbox escapes, path traversal, symlink escapes, Windows path aliases, allowlist smuggling, argument injection, runaway regexes, rollback under a kill signal, a save made while the tests run. They are in [`test/`](test), and `npx turnpack doctor` re-checks the main ones on your machine. The full threat model is in [SECURITY.md](SECURITY.md).
 
 ## When you don't need it
 

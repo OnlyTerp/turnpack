@@ -7,7 +7,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
 import { isVerifyAllowed, runShip } from "../dist/index.js";
-import { removeDir, trySymlink } from "./helpers.mjs";
+import { removeDir, trySymlink, wait } from "./helpers.mjs";
 
 function sha(filePath) {
   return crypto.createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
@@ -118,6 +118,97 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
     assert.equal(res.status, "FAILED_ROLLBACK_PARTIAL");
     assert.equal(res.rollbackErrors.length, 1);
     assert.match(res.summary, /Rollback Errors/);
+  });
+
+  it("leaves a file alone if something else changed it while verify was running", async () => {
+    const aPath = path.join(repoDir, "a.js");
+    const bBefore = sha(path.join(repoDir, "b.js"));
+    const saved = "export const A = 'saved by a person while the tests ran';\n";
+
+    const running = runShip({
+      cwd: repoDir,
+      edits: [
+        { path: "a.js", search: "1", replace: "99" },
+        { path: "b.js", search: "2", replace: "77" },
+      ],
+      verify: 'node -e "setTimeout(() => process.exit(1), 1200)"',
+    });
+    await wait(400);
+    fs.writeFileSync(aPath, saved);
+    const res = await running;
+
+    // The save survives, the untouched file is still restored, and the reply does not pretend.
+    assert.equal(fs.readFileSync(aPath, "utf8"), saved);
+    assert.equal(sha(path.join(repoDir, "b.js")), bBefore);
+    assert.equal(res.status, "FAILED_ROLLBACK_PARTIAL");
+    assert.equal(res.rollbackErrors.length, 1);
+    assert.match(res.summary, /Restored 1 of 2 file\(s\)/);
+    assert.match(res.summary, /a\.js: changed on disk while verify was running/);
+    assert.doesNotMatch(res.summary, /workspace is unchanged/);
+  });
+
+  it("returns when the verify command exits, even if it left a process holding its output", async () => {
+    // The leftover detaches itself and inherits the command's output pipes, the way a dev server
+    // started by a test script does. It lives for 6 s; ship must not.
+    const leftover =
+      "require('node:child_process').spawn(process.execPath,['-e','setTimeout(function(){},6000)']," +
+      "{detached:true,stdio:'inherit',cwd:require('node:os').tmpdir()}).unref()";
+    const aBefore = sha(path.join(repoDir, "a.js"));
+
+    let t0 = Date.now();
+    const failed = await runShip({
+      cwd: repoDir,
+      edits: [{ path: "a.js", search: "1", replace: "99" }],
+      verify: `node -e "${leftover};process.exit(1)"`,
+      timeout_ms: 20000,
+    });
+    assert.ok(Date.now() - t0 < 4000, `a failing verify held ship for ${Date.now() - t0} ms`);
+    assert.equal(failed.status, "FAILED_AND_ROLLED_BACK");
+    assert.equal(sha(path.join(repoDir, "a.js")), aBefore);
+    assert.match(failed.summary, /left a background process/);
+
+    t0 = Date.now();
+    const passed = await runShip({
+      cwd: repoDir,
+      edits: [
+        { path: "a.js", search: "1", replace: "10" },
+        { path: "b.js", search: "2", replace: "20" },
+      ],
+      verify: [`node -e "${leftover}"`, "node check.mjs"],
+      timeout_ms: 20000,
+    });
+    assert.ok(Date.now() - t0 < 4000, `a passing verify held ship for ${Date.now() - t0} ms`);
+    assert.equal(passed.status, "SHIPPED_AND_VERIFIED");
+  });
+
+  it("on Windows, refuses protected and secret files under their other spellings", { skip: process.platform !== "win32" }, async () => {
+    fs.mkdirSync(path.join(repoDir, ".git", "hooks"), { recursive: true });
+    fs.writeFileSync(path.join(repoDir, ".turnpack.json"), "{}\n");
+    fs.writeFileSync(path.join(repoDir, ".env"), "TOKEN=keep\n");
+
+    for (const target of [
+      ".git::$INDEX_ALLOCATION/hooks/pre-commit",
+      ".git./hooks/pre-commit",
+      ".git /hooks/pre-commit",
+      ".turnpack.json::$DATA",
+      ".turnpack.json.",
+      ".env::$DATA",
+    ]) {
+      const res = await runShip({ cwd: repoDir, writes: [{ path: target, content: "planted\n" }] });
+      assert.equal(res.status, "ABORTED_BEFORE_WRITE", target);
+    }
+    // The same trick one level up: naming the aliased directory as the call's root.
+    const viaRoot = await runShip({
+      cwd: path.join(repoDir, ".git::$INDEX_ALLOCATION"),
+      writes: [{ path: "hooks/pre-commit", content: "planted\n" }],
+    });
+    assert.equal(viaRoot.status, "ABORTED_BEFORE_WRITE");
+
+    assert.equal(fs.existsSync(path.join(repoDir, ".git", "hooks", "pre-commit")), false);
+    assert.equal(fs.readFileSync(path.join(repoDir, ".turnpack.json"), "utf8"), "{}\n");
+    assert.equal(fs.readFileSync(path.join(repoDir, ".env"), "utf8"), "TOKEN=keep\n");
+    // And no stray entry whose name ends in a dot or a space was left behind.
+    assert.deepEqual(fs.readdirSync(repoDir).filter((name) => /[. ]$/.test(name)), []);
   });
 
   it("enforces the verify allowlist against shell-operator smuggling", async () => {

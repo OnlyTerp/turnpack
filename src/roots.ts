@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { isInsideDir } from "./security.js";
+import { isInsideDir, shortNameAliasBelow, windowsPathProblem } from "./security.js";
 
 /**
  * The set of directories a server instance is allowed to work in.
@@ -94,10 +94,15 @@ export function resolveToolRoot(policy: RootPolicy, requested?: unknown): string
   const trimmed = requested.trim();
   if (!trimmed || trimmed === ".") return primary;
 
+  // On Windows, `.git::$INDEX_ALLOCATION` and `GIT~1` both open the `.git` directory without
+  // being called `.git`. A root spelled that way would hide the directory from every name check
+  // made on the paths below it, so those spellings are refused like any other off-limits root.
+  const aliased = process.platform === "win32" && windowsPathProblem(trimmed) !== null;
   const candidate = path.isAbsolute(trimmed) ? path.resolve(trimmed) : path.resolve(primary, trimmed);
-  const real = realDirOrNull(candidate);
-  if (real && policy.roots.some((root) => isInsideDir(root, real))) {
-    return real;
+  const real = aliased ? null : realDirOrNull(candidate);
+  if (real) {
+    const root = policy.roots.find((entry) => isInsideDir(entry, real));
+    if (root && shortNameAliasBelow(root, real) === null) return real;
   }
   // The same message whether the directory is missing or merely off-limits, so the answer
   // cannot be used to probe what exists outside the workspace.

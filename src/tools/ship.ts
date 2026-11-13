@@ -101,6 +101,12 @@ interface TurnpackProjectConfig {
 const FAIL_OUTPUT_HEAD_BYTES = 4096;
 const FAIL_OUTPUT_TAIL_BYTES = 16384;
 const PASS_OUTPUT_TAIL_BYTES = 1500;
+/** After the verify command exits, how long to wait for the rest of its output before returning. */
+const OUTPUT_DRAIN_MS = 500;
+/** After a timeout kill, how long to wait for the command to be reported dead before returning anyway. */
+const KILL_GRACE_MS = 2000;
+const LEFT_RUNNING_NOTE =
+  "\n[turnpack: the command finished but left a background process holding its output open; ship did not wait for it]";
 // Characters that let one shell command line carry a second command. Only consulted when the
 // project opted into the verify allowlist.
 const SHELL_CONTROL = /[;&|<>`$()\r\n]/;
@@ -320,25 +326,54 @@ function runVerifyCommand(
 
     let timedOut = false;
     let settled = false;
-    const timer = setTimeout(() => {
-      timedOut = true;
-      if (child.pid) killProcessTree(child.pid);
-    }, timeoutMs);
+    let exitCode: number | null = null;
+    let drainTimer: NodeJS.Timeout | undefined;
+    let killTimer: NodeJS.Timeout | undefined;
 
     const settle = (run: VerifyRun): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(drainTimer);
+      clearTimeout(killTimer);
       onChild(null);
       resolveRun(run);
     };
+    const finish = (code: number | null, pipesLeftOpen: boolean): void => {
+      if (pipesLeftOpen) {
+        // Let go of the pipes. Whatever still holds the other end keeps running on its own.
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }
+      settle({
+        ok: !timedOut && code === 0,
+        exitCode: code,
+        timedOut,
+        output: pipesLeftOpen ? `${output.text()}${LEFT_RUNNING_NOTE}` : output.text(),
+      });
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      if (child.pid) killProcessTree(child.pid);
+      // The kill reaches the command and what it started, but not a process that detached
+      // itself. If one of those keeps the pipes open, stop waiting for it.
+      killTimer = setTimeout(() => finish(exitCode, true), KILL_GRACE_MS);
+    }, timeoutMs);
 
     child.on("error", (err) => {
       settle({ ok: false, exitCode: null, timedOut, output: err.message });
     });
-    child.on("close", (code) => {
-      settle({ ok: !timedOut && code === 0, exitCode: code, timedOut, output: output.text() });
+    // "exit" is the command finishing; "close" is its output pipes closing. They normally arrive
+    // together. They do not when the command leaves a process behind that inherited the pipes
+    // (a dev server a test started and never stopped): "close" then waits for that process, which
+    // may be forever, and every later ship call queues behind this one. So the verdict is taken
+    // at "exit", after a moment for the last of the output.
+    child.on("exit", (code) => {
+      exitCode = code;
+      drainTimer = setTimeout(() => finish(code, true), OUTPUT_DRAIN_MS);
     });
+    child.on("close", (code) => finish(code ?? exitCode, false));
   });
 }
 
@@ -353,6 +388,15 @@ const DEFAULT_RESTORE_OPS: RestoreOps = {
   readFile: (absPath) => fs.readFileSync(absPath),
 };
 
+/** SHA-256 of the file as it is now, null if it does not exist, undefined if that cannot be told. */
+function currentSha(absPath: string, ops: RestoreOps): string | null | undefined {
+  try {
+    return sha256(ops.readFile(absPath));
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "ENOENT" ? null : undefined;
+  }
+}
+
 function restoreSnapshots(plans: PlannedWrite[], createdDirs: string[], ops: RestoreOps): string[] {
   const errors: string[] = [];
   for (let i = plans.length - 1; i >= 0; i--) {
@@ -360,6 +404,18 @@ function restoreSnapshots(plans: PlannedWrite[], createdDirs: string[], ops: Res
     if (!plan) continue;
     const { preimage } = plan;
     try {
+      // Restore only what ship itself left there. If the file no longer holds what ship wrote,
+      // something else changed it while verify ran (a save in the editor, most likely), and
+      // writing the snapshot over it would destroy that change without a word.
+      const shipped = plan.nextBytes === null ? null : sha256(plan.nextBytes);
+      const current = currentSha(preimage.absPath, ops);
+      if (current !== undefined && current !== shipped) {
+        if (current === (preimage.existed ? preimage.sha256 : null)) continue; // already as it was
+        errors.push(
+          `${preimage.relPath}: changed on disk while verify was running, so it was left as it is (not restored)`,
+        );
+        continue;
+      }
       if (preimage.existed) {
         ops.writeFile(preimage.absPath, preimage.bytes, preimage.mode);
         if (sha256(ops.readFile(preimage.absPath)) !== preimage.sha256) {
@@ -814,7 +870,7 @@ export async function runShip(
           `${status}: verify "${cmd}" failed (${reason}).`,
           rollbackErrors.length === 0
             ? `Restored ${plans.length} file(s) to byte-exact pre-edit snapshots. The workspace is unchanged; fix the edit and ship again.`
-            : `Rollback Errors (${rollbackErrors.length}):\n  - ${rollbackErrors.join("\n  - ")}`,
+            : `Restored ${plans.length - rollbackErrors.length} of ${plans.length} file(s). Rollback Errors (${rollbackErrors.length}):\n  - ${rollbackErrors.join("\n  - ")}\nThose files are not in their pre-edit state. Read them before shipping again.`,
           failedOutput,
         ].join("\n\n"),
         filesModified: rollbackErrors.length === 0 ? [] : fileList,

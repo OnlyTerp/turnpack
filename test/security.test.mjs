@@ -1,17 +1,21 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, describe, it } from "node:test";
 import { pathToFileURL } from "node:url";
+import { runPack } from "../dist/index.js";
 import { applyClientRoots, createRootPolicy, resolveToolRoot } from "../dist/roots.js";
 import { removeDir, trySymlink } from "./helpers.mjs";
 import {
+  findShortNameAlias,
   getShardCacheDir,
   isInsideDir,
   isProtectedPath,
   isSecretPath,
   resolveSafePath,
+  windowsPathProblem,
   writePrivateShard,
 } from "../dist/security.js";
 
@@ -164,6 +168,104 @@ describe("security & confinement", () => {
       "src/my.git.notes.md",
     ]) {
       assert.equal(isProtectedPath(open), false, open);
+    }
+  });
+
+  it("recognises the Windows spellings that give a file a second name", () => {
+    for (const bad of [
+      ".env::$DATA",
+      ".git::$INDEX_ALLOCATION/hooks/pre-commit",
+      "src/key.pem:hidden",
+      ".git./hooks/x",
+      ".turnpack.json.",
+      "dir /file.txt",
+      "C:\\repo\\.env::$DATA",
+    ]) {
+      assert.notEqual(windowsPathProblem(bad), null, bad);
+    }
+    for (const fine of [
+      "src/app.ts",
+      ".env.example",
+      "C:\\repo\\src\\a.ts",
+      "\\\\server\\share\\a.ts",
+      "..",
+      "./a/../b",
+      "a..b/c.d",
+      ".gitignore",
+      "notes v2.txt",
+    ]) {
+      assert.equal(windowsPathProblem(fine), null, fine);
+    }
+
+    // The name checks see through the same spellings on their own, whatever the caller did first.
+    for (const locked of [
+      ".git::$INDEX_ALLOCATION/hooks/pre-commit",
+      ".GIT./config",
+      ".git /hooks/x",
+      ".turnpack.json::$DATA",
+      "sub/.turnpack.json.",
+    ]) {
+      assert.equal(isProtectedPath(locked), true, locked);
+    }
+    for (const secret of [".env::$DATA", "deploy.pem::$DATA", "id_rsa.", ".npmrc ", "home/.aws/credentials::$DATA"]) {
+      assert.equal(isSecretPath(secret), true, secret);
+    }
+    assert.equal(isSecretPath("src/app.ts::$DATA"), false);
+
+    // 8.3 short names: an alias has the short-name shape and is not the name on disk.
+    assert.equal(findShortNameAlias("C:\\w\\repo\\GIT~1\\hooks", "C:\\w\\repo\\.git\\hooks", 2), "GIT~1");
+    assert.equal(findShortNameAlias("C:\\w\\repo\\SRC\\App.ts", "C:\\w\\repo\\src\\app.ts", 2), null);
+    assert.equal(findShortNameAlias("S:\\repo\\v~1\\a.ts", "C:\\real\\repo\\v~1\\a.ts", 2), null);
+    // Only the part below the workspace is the caller's to choose.
+    assert.equal(findShortNameAlias("C:\\PROGRA~1\\repo\\a.ts", "C:\\Program Files\\repo\\a.ts", 2), null);
+  });
+
+  it("on Windows, refuses those spellings before any file is opened", { skip: process.platform !== "win32" }, async () => {
+    const SECRET = "TOKEN=not-for-reading";
+    fs.writeFileSync(path.join(repoDir, ".env"), `${SECRET}\n`);
+    try {
+      for (const bad of [
+        ".env::$DATA",
+        "src/ok.ts::$DATA",
+        ".git::$INDEX_ALLOCATION/hooks/pre-commit",
+        "src./ok.ts",
+        "src/ok.ts.",
+        "src /ok.ts",
+      ]) {
+        assert.throws(() => resolveSafePath(repoDir, bad), /ERR_PATH_ALIAS/, bad);
+      }
+
+      // The secret shield matches names, so the same file under another name must never be read.
+      const packed = await runPack({ root: repoDir, files: [".env", ".env::$DATA"], inline_only: true });
+      assert.equal(packed.includes(SECRET), false);
+
+      delete process.env.TURNPACK_ROOT;
+      delete process.env.CLAUDE_PROJECT_DIR;
+      const policy = createRootPolicy(repoDir);
+      for (const root of ["src::$INDEX_ALLOCATION", "src.", "src ./"]) {
+        assert.throws(() => resolveToolRoot(policy, root), /ERR_ROOT_OUTSIDE_WORKSPACE|must be/, root);
+      }
+
+      // Short names exist only on volumes that still generate them, so this part runs where it can.
+      const longName = "a-directory-with-a-long-name";
+      fs.mkdirSync(path.join(repoDir, longName), { recursive: true });
+      fs.writeFileSync(path.join(repoDir, longName, "x.txt"), "x\n");
+      let shortName = "";
+      try {
+        shortName = execFileSync(
+          "cmd.exe",
+          ["/d", "/s", "/c", `"for %I in ("${path.join(repoDir, longName)}") do @echo %~nxsI"`],
+          { encoding: "utf8", windowsVerbatimArguments: true },
+        ).trim();
+      } catch {
+        shortName = "";
+      }
+      if (/~\d/.test(shortName) && shortName.toLowerCase() !== longName) {
+        assert.throws(() => resolveSafePath(repoDir, `${shortName}/x.txt`), /ERR_PATH_ALIAS/, shortName);
+        assert.throws(() => resolveToolRoot(policy, shortName), /ERR_ROOT_OUTSIDE_WORKSPACE/, shortName);
+      }
+    } finally {
+      fs.rmSync(path.join(repoDir, ".env"), { force: true });
     }
   });
 
