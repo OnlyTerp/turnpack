@@ -15,8 +15,8 @@ First release.
 - **Workspace jail fixed on the server side.** The boundary comes from `TURNPACK_ROOT`, MCP `roots`, `CLAUDE_PROJECT_DIR` or the launch directory, in that order. The `root` / `cwd` tool argument can choose a subdirectory and nothing else.
 - **`batch` runs in its own process** under Node's permission model (no writes, no child processes, no workers, reads limited to the workspace), in a `node:vm` context that receives no host objects, with a minimal environment and a wall-clock limit enforced by the parent.
 - **Secret shield** for `.env*`, keys, registry and cloud credentials, Terraform state and similar files.
-- **Protected paths**: `ship` never writes `.turnpack.json` or anything under `.git/`.
-- **Verify allowlist** (optional, `.turnpack.json`): exact commands or commands with plain arguments; shell operators are refused, and an invalid config file blocks verify instead of disabling the list.
+- **Protected paths**: `ship` never writes a `.turnpack.json` or anything inside a `.git` directory, at any depth.
+- **Verify allowlist** (optional, `.turnpack.json`): exact commands or commands with plain arguments; shell operators are refused, an invalid config file blocks verify instead of disabling the list, and the list applies to every subdirectory a call can name as its `cwd`.
 - **Rollback on interruption**: SIGINT, SIGTERM and SIGHUP during verify restore the snapshots before the server exits.
 - Search patterns are passed to ripgrep as data, so a query that starts with `-` is searched for rather than parsed as an option.
 - Concurrent `ship` calls are queued. Edits to files that are not valid UTF-8 are refused.
@@ -32,7 +32,7 @@ First release.
 
 - `turnpack demo`: a five-step walkthrough in a throwaway temp repo.
 - `turnpack doctor`: checks Node, ripgrep, the MCP handshake, the schema size, the secret shield, the workspace jail and the `batch` isolation mode.
-- `turnpack init` / `uninstall`: preview, backup, atomic write. Configs that cannot be parsed are left untouched. Claude Code, Codex CLI and OMP by default; Cursor, Gemini CLI, OpenCode and Grok CLI when named.
+- `turnpack init` / `uninstall`: preview, backup, atomic write. Configs that cannot be parsed are left untouched. On Windows the server entry goes through `cmd /c`, because `npx` is a batch file there. Claude Code, Codex CLI and OMP by default; Cursor, Gemini CLI, OpenCode and Grok CLI when named.
 - `turnpack estimate`, `turnpack audit`, `turnpack serve`.
 
 ### Project

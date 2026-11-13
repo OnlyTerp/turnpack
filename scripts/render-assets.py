@@ -344,6 +344,62 @@ def write_time_saved_svg(theme: str) -> None:
     (ASSETS_DIR / f"time-saved-{theme}.svg").write_text(svg, encoding="utf-8")
 
 
+def write_social_preview_svg() -> None:
+    """1280x640 card for link previews. Rasterize it to PNG and upload it under the repository's
+    Settings -> Social preview; GitHub does not accept SVG there."""
+    p = PALETTES["dark"]
+    tools = [
+        ("pack", p["cyan"], "Search + read many files", "in one call"),
+        ("ship", p["green"], "Edit, test, and undo", "if the tests fail"),
+        ("batch", p["amber"], "One read-only script", "instead of 40 reads"),
+    ]
+    cards = []
+    x = 80
+    for name, color, line1, line2 in tools:
+        cards.append(
+            f'<rect x="{x}" y="372" width="352" height="124" rx="16" fill="{p["card"]}" stroke="{p["border"]}" stroke-width="1.5"/>'
+            f'<text x="{x + 26}" y="414" fill="{color}" font-family="{FONT_MONO}" font-size="24" font-weight="700">{name}</text>'
+            f'<text x="{x + 26}" y="448" fill="{p["title"]}" font-family="{FONT_SANS}" font-size="20" font-weight="600">{line1}</text>'
+            f'<text x="{x + 26}" y="474" fill="{p["body"]}" font-family="{FONT_SANS}" font-size="18">{line2}</text>'
+        )
+        x += 384
+
+    svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-label="Turnpack: fewer back-and-forth AI turns">
+  <defs>
+    <linearGradient id="social-accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="{p['green']}"/>
+      <stop offset="100%" stop-color="{p['cyan']}"/>
+    </linearGradient>
+    <radialGradient id="social-glow" cx="85%" cy="12%" r="55%">
+      <stop offset="0%" stop-color="{p['green']}" stop-opacity="0.20"/>
+      <stop offset="100%" stop-color="{p['bg']}" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="640" fill="{p['bg']}"/>
+  <rect width="1280" height="640" fill="url(#social-glow)"/>
+
+  <g transform="translate(80, 64)">
+    <rect x="0" y="0" width="64" height="64" rx="16" fill="url(#social-accent)"/>
+    <rect x="15" y="15" width="34" height="8" rx="4" fill="#FFFFFF" opacity="0.95"/>
+    <rect x="15" y="28" width="26" height="8" rx="4" fill="#FFFFFF" opacity="0.80"/>
+    <rect x="15" y="41" width="34" height="8" rx="4" fill="#FFFFFF" opacity="0.95"/>
+  </g>
+  <text x="164" y="108" fill="{p['title']}" font-family="{FONT_SANS}" font-size="38" font-weight="800" letter-spacing="-0.6">turnpack</text>
+
+  <text x="80" y="218" fill="{p['title']}" font-family="{FONT_SANS}" font-size="58" font-weight="800" letter-spacing="-1.6">Stop watching your AI</text>
+  <text x="80" y="286" fill="{p['title']}" font-family="{FONT_SANS}" font-size="58" font-weight="800" letter-spacing="-1.6">read one file at a time.</text>
+  <text x="80" y="334" fill="{p['body']}" font-family="{FONT_SANS}" font-size="25">A local MCP server that folds an agent's round trips into single calls.</text>
+
+  {"".join(cards)}
+
+  <rect x="80" y="536" width="322" height="50" rx="12" fill="{p['greenBg']}" stroke="{p['green']}" stroke-width="1.2"/>
+  <text x="104" y="569" fill="{p['greenText']}" font-family="{FONT_MONO}" font-size="22" font-weight="700">npx turnpack demo</text>
+  <text x="1200" y="569" text-anchor="end" fill="{p['muted']}" font-family="{FONT_SANS}" font-size="20" font-weight="600">No API keys · zero dependencies · MIT</text>
+</svg>
+"""
+    (ASSETS_DIR / "social-preview.svg").write_text(svg, encoding="utf-8")
+
+
 def load_font(size: int, mono: bool = False):
     candidates = (
         ["C:/Windows/Fonts/consolab.ttf", "C:/Windows/Fonts/consola.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"]
@@ -463,4 +519,5 @@ if __name__ == "__main__":
         write_how_it_works_svg(th)
         write_ttft_tax_svg(th)
         write_time_saved_svg(th)
+    write_social_preview_svg()
     render_demo_gif()

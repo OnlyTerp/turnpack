@@ -73,7 +73,7 @@ The test suite deliberately breaks layer one and checks that layer two still ref
 `ship` writes files and runs commands. That is its purpose, and your AI app should ask you before allowing it. Within that:
 
 - **Validate, then write.** Every edit, write and delete is checked in memory first. A missing anchor, an ambiguous anchor, a path outside the workspace or a secret file aborts the whole call with nothing written.
-- **Protected paths.** `ship` never modifies `.turnpack.json` or anything under `.git/`, whatever the arguments. The first holds the verify allowlist; the second holds hooks and config that run on your next ordinary git command.
+- **Protected paths.** `ship` never modifies a `.turnpack.json` or anything inside a `.git` directory, at any depth and whatever the arguments. The first holds the verify allowlist; the second holds hooks and config that run on your next ordinary git command. Nested repositories and submodules are covered too.
 - **Byte-exact rollback.** Snapshots are taken before the first write and verified by SHA-256 when restored. Files that were created are removed, along with directories created for them. Deleted files come back with their original mode.
 - **Interruptions.** If the server receives SIGINT, SIGTERM or SIGHUP while verify is running, it stops the verify command and restores the snapshots before exiting.
 - **Text only.** Search-and-replace edits are refused on files that are not valid UTF-8, so bytes the edit never mentioned cannot be corrupted.
@@ -87,6 +87,8 @@ The test suite deliberately breaks layer one and checks that layer two still ref
   "allowedVerify": ["npm test", "npx tsc --noEmit", "pytest"]
 }
 ```
+
+A call may name a subdirectory as its `cwd`. Every `.turnpack.json` from that directory up to the workspace root is enforced, so stepping into a subdirectory does not step out from under the list.
 
 A command is accepted if it equals an entry, or is an entry followed by plain arguments. Arguments containing `; & | < > $ ( )`, backticks or newlines are refused, so `npm test && curl … | sh` does not pass as `npm test`. If the file exists but is not valid, verify is refused rather than allowed.
 

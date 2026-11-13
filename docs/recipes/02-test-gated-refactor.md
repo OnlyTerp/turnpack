@@ -23,6 +23,7 @@ A refused command aborts the call with `ABORTED_BEFORE_WRITE`, before any file i
 
 Three details worth knowing:
 
-- `ship` cannot edit `.turnpack.json`, so the agent cannot loosen the list.
+- `ship` cannot create or edit a `.turnpack.json` anywhere in the workspace, so the agent cannot loosen the list or plant a more permissive one in a subdirectory.
+- The list at the workspace root applies to calls that name a subdirectory as their `cwd` as well.
 - If the file exists but is not valid JSON, verify is refused until you fix it. A typo does not silently turn the allowlist off.
 - The list controls which commands can be started. It does not control what your tests do once they run, and `ship` can edit your tests. Treat it as a guardrail, and keep reviewing what the agent ships.
