@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import { describeChecks, detectChecks } from "../checks.js";
 import { isSecretPath, resolveSafePath, resolveWorkspaceRoot, writePrivateShard } from "../security.js";
@@ -135,10 +136,17 @@ function parseFileSpec(item: unknown, idx: number, isFile: (candidate: string) =
   return { path: text };
 }
 
+/** Things the server wants to know about a pack call. */
+export interface PackHooks {
+  /** A file's contents were shown to the model (not an outline), as they were at that moment. */
+  onRead?: (absPath: string, sha256: string) => void;
+}
+
 function readSingleFileSection(
   workspaceRoot: string,
   spec: PackFileSpec,
   allowSecrets: boolean,
+  hooks: PackHooks,
 ): string {
   let safe: { absPath: string; relPath: string };
   try {
@@ -191,6 +199,7 @@ function readSingleFileSection(
   }
 
   const content = buf.toString("utf8");
+  if (!spec.outline) hooks.onRead?.(safe.absPath, createHash("sha256").update(buf).digest("hex"));
   if (spec.outline) {
     const symbols = extractSymbols(content);
     const lines = symbols.slice(0, 200).map((s) => `${s.kind} ${s.name} (L${s.startLine}-${s.endLine})`);
@@ -300,6 +309,7 @@ export async function runPack(
     maxInlineBytes: 24000,
     readToolHint: "Read",
   },
+  hooks: PackHooks = {},
 ): Promise<string> {
   const raw: Record<string, unknown> = isRecord(args) ? args : {};
   const workspaceRoot = resolveWorkspaceRoot(optionalString(pick(raw, ROOT_KEYS), "pack.root"));
@@ -410,7 +420,7 @@ export async function runPack(
   if (specs.length > 0) {
     tasks.push(
       Promise.resolve().then(() => {
-        const sections = specs.map((spec) => readSingleFileSection(workspaceRoot, spec, allowSecrets));
+        const sections = specs.map((spec) => readSingleFileSection(workspaceRoot, spec, allowSecrets, hooks));
         return {
           heading: `FILES (${specs.length})`,
           body: `## FILES (${specs.length})\n${sections.join("\n\n")}`,

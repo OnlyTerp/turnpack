@@ -23,6 +23,6 @@ What is handled for you:
 - **Other names for the same file.** `.env::$DATA`, a trailing dot or space, and 8.3 short names are refused, so a protected or secret file cannot be reached under a second spelling.
 - **Config locations.** `init` reads and writes the same per-user config files your AI app uses on Windows, under your user profile.
 
-One difference from macOS and Linux: Windows has no equivalent of SIGTERM, so if the server process is ended abruptly while a verify command is running, the rollback that would run on other systems does not get the chance. Ctrl+C in a console is still handled.
+One difference from macOS and Linux: Windows has no equivalent of SIGTERM, so a server process that is ended while a verify command is running cannot restore the files itself. The next Turnpack server to start restores them from the rollback journal and tells the model what it undid. Ctrl+C in a console is still handled at once.
 
 If `doctor` reports `batch isolation` as "own process only", your Node build could not start the script runner with Node's permission model. `batch` still works and still runs in its own process; see [SECURITY.md](../../SECURITY.md) for what that changes.

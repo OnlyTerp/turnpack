@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import { describeChecks, detectChecks } from "./checks.js";
+import { recoverJournals, takeRecoveryNotes } from "./journal.js";
 import {
   applyClientRoots,
   configScope,
@@ -170,7 +171,8 @@ export const TOOLS: McpToolDefinition[] = [
         verify: {
           type: "array",
           items: { type: "string" },
-          description: 'Commands that must each exit 0, run in order, e.g. ["npm test"]. Omit only for untestable changes.',
+          description:
+            'Commands that must each exit 0, run in order, e.g. ["npm test"]. {files} becomes the files this call changed (e.g. "npx vitest related {files} --run"). Omit only for untestable changes.',
         },
         timeout_ms: { type: "integer", description: "Per-command verify timeout (default 60000, max 300000)." },
         rollback_on_fail: { type: "boolean", description: "Restore files if verify fails (default true)." },
@@ -343,6 +345,31 @@ export function startMcpServer(options: McpServerOptions = {}): void {
   // `ship` calls run one at a time: two interleaved multi-file writes would defeat the
   // all-or-nothing guarantee each of them makes.
   let shipQueue: Promise<unknown> = Promise.resolve();
+  let shipsInFlight = 0;
+  let clientGone = false;
+  // What the model last saw of each file it read with pack, so ship can say when a file it is
+  // about to edit has changed since.
+  const readLedger = new Map<string, string>();
+  // A ship call cut off by its process stopping is undone by the next process to look. What was
+  // undone is said on stderr, and left as a note on disk for the server that next works in that
+  // folder, which may be this one or another app's, to pass on to the model.
+  const recover = (): void => {
+    try {
+      for (const note of recoverJournals()) process.stderr.write(`turnpack: ${note.text}\n`);
+    } catch (err) {
+      process.stderr.write(`turnpack: could not check for interrupted ship calls: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
+  };
+  const takeNotes = (root: string): string => {
+    try {
+      return takeRecoveryNotes(root)
+        .map((text) => `[turnpack] ${text}\n\n`)
+        .join("");
+    } catch {
+      return "";
+    }
+  };
+  recover();
 
   const write = (payload: Record<string, unknown>): void => {
     const json = JSON.stringify(payload);
@@ -399,6 +426,7 @@ export function startMcpServer(options: McpServerOptions = {}): void {
       return;
     }
     const startedAt = performance.now();
+    recover();
     try {
       await runTool(id, toolName, params, startedAt);
     } catch (err) {
@@ -415,9 +443,10 @@ export function startMcpServer(options: McpServerOptions = {}): void {
     params: Record<string, unknown>,
     startedAt: number,
   ): Promise<void> => {
+    let notes = "";
     const toolText = (callId: string | number, text: string, isError: boolean): void => {
       logCall(toolName, startedAt, text, isError);
-      reply(callId, { content: [{ type: "text", text }], isError });
+      reply(callId, { content: [{ type: "text", text: notes + text }], isError });
     };
     const rawArgs = params.arguments ?? {};
     if (!isRecord(rawArgs)) {
@@ -435,9 +464,13 @@ export function startMcpServer(options: McpServerOptions = {}): void {
     const args: Record<string, unknown> = { ...rawArgs };
     for (const key of ROOT_KEYS) delete args[key];
     args.root = root;
+    notes = takeNotes(root);
 
     if (toolName === "pack") {
-      toolText(id, await runPack(args as PackArgs, detectedClient), false);
+      const onRead = (absPath: string, sha: string): void => {
+        readLedger.set(absPath, sha);
+      };
+      toolText(id, await runPack(args as PackArgs, detectedClient, { onRead }), false);
       return;
     }
 
@@ -459,13 +492,17 @@ export function startMcpServer(options: McpServerOptions = {}): void {
         write({ jsonrpc: "2.0", method: "notifications/progress", params: progress });
       };
       const workspaceRoots = configScope(policy, root);
+      shipsInFlight += 1;
       const run = shipQueue.then(async () => {
+        // With the client gone there is no one to tell what a ship did, so a queued one does not start.
+        if (clientGone) return null;
         const beat = wantsProgress
           ? setInterval(() => report(`${stage} (${Math.round((Date.now() - stageStartedAt) / 1000)}s)`), 5000)
           : undefined;
         try {
           return await runShip(args as ShipArgs, {
             workspaceRoots,
+            readLedger,
             onProgress: (message) => {
               stage = message;
               stageStartedAt = Date.now();
@@ -476,8 +513,11 @@ export function startMcpServer(options: McpServerOptions = {}): void {
           clearInterval(beat);
         }
       });
-      shipQueue = run.catch(() => undefined);
+      shipQueue = run.catch(() => undefined).finally(() => {
+        shipsInFlight -= 1;
+      });
       const res = await run;
+      if (!res) return;
       toolText(id, res.summary, res.status !== "SHIPPED_AND_VERIFIED" && res.status !== "APPLIED_NO_VERIFY");
       return;
     }
@@ -619,9 +659,13 @@ export function startMcpServer(options: McpServerOptions = {}): void {
     drainBuffer();
   });
 
-  // The client going away mid-reply is not an error worth a stack trace.
+  // The client going away mid-reply is not an error worth a stack trace. A ship that is running
+  // finishes first, so its rollback (or its journal) settles instead of being cut off.
   output.on("error", () => {
-    process.exit(0);
+    if (clientGone) return;
+    clientGone = true;
+    if (shipsInFlight > 0) void shipQueue.then(() => process.exit(0));
+    else process.exit(0);
   });
 }
 

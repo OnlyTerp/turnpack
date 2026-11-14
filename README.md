@@ -98,6 +98,10 @@ FAILED_AND_ROLLED_BACK: verify "npm test" failed (exit code 1).
 
 Restored 1 file(s) to byte-exact pre-edit snapshots. The workspace is unchanged; fix the edit and ship again.
 
+Changed by this call and tested together: src/tax.js (line 3).
+
+The failing output does not mention any file this call changed. It names src/invoice.js:1, a file this call did not change: often a caller or a test the change has not reached yet.
+
 $ npm test
 > test
 > node test/invoice.test.js
@@ -108,7 +112,7 @@ import { calculateTax } from "./tax.js";
 SyntaxError: The requested module './tax.js' does not provide an export named 'calculateTax'
 ```
 
-The repo is exactly as it was, and the agent has the error that tells it what it missed. It ships again with both files:
+The repo is exactly as it was, and the reply names the file the edit missed. It ships again with both files:
 
 ```json
 {
@@ -130,7 +134,7 @@ The repo is exactly as it was, and the agent has the error that tells it what it
 ```
 
 ```text
-SHIPPED_AND_VERIFIED in 170ms: 2 file(s) changed (src/tax.js, src/invoice.js).
+SHIPPED_AND_VERIFIED in 283ms: 2 file(s) changed: src/tax.js (line 3), src/invoice.js (lines 1, 4).
 
 $ npm test  (passed)
 > test
@@ -295,7 +299,7 @@ Turnpack tells the agent when to use its tools through the MCP `instructions` fi
 | `edits` | Search-and-replace. Each `search` must identify one place (or pass `replace_all`). The exact text is tried first. If it is not there, a difference the model did not mean is tolerated, as long as it still points at exactly one place: line endings, indentation, trailing spaces, line numbers copied from a listing, curly quotes. The replacement is re-indented to match the file, and the reply says when this happened. |
 | `patch` | The same change as one patch, in the `apply_patch` format OpenAI's models write or as a unified diff. Hunks are placed by their context, not their line numbers. |
 | `writes`, `moves`, `deletes` | Create, replace, rename or delete whole files. A moved file can be edited under its new name in the same call. |
-| `verify` | Commands that must each exit 0, for example `["npm test"]` or `["tsc --noEmit", "npm test"]`. |
+| `verify` | Commands that must each exit 0, run in order, for example `["npm test"]` or `["tsc --noEmit", "npm test"]`. `{files}` becomes the files the call changed: `"npx vitest related {files} --run"`. |
 | `rollback_on_fail` | Defaults to `true`. |
 
 Every edit is checked before anything is written: a problem in file five means files one to four are never touched. All the problems come back in one reply, each with the closest text in the file, its line numbers and the first line that differs, so the next attempt needs no re-read:
@@ -319,6 +323,8 @@ The reply always starts with what is true on disk now:
 `SHIPPED_AND_VERIFIED` · `APPLIED_NO_VERIFY` · `ABORTED_BEFORE_WRITE` · `FAILED_AND_ROLLED_BACK` · `FAILED_ROLLBACK_PARTIAL` · `FAILED_KEPT_ON_DISK`
 
 When verify fails, the agent gets the beginning and the end of the output, because test failures are reported at the end. When it passes, it gets a few lines, because nobody needs 800 lines of green.
+
+Replies also say which lines each file's change covers, which verify command failed and which passed before it, and whether the file and line a failure names is one the call changed. What happens in each edge case (a failure after some edits landed, a process killed mid-test, a file that changed after the agent read it, steps that depend on each other) is in [docs/behavior.md](docs/behavior.md).
 
 ### `batch`: one script instead of forty reads
 
@@ -399,7 +405,7 @@ These are measured, by `npm run bench` and `npx turnpack doctor --json` on Linux
 
 | | Measured | Notes |
 | :--- | ---: | :--- |
-| Tool schema in your context | 5,090 bytes, about 1,270 tokens | All three tools, plus about 230 tokens of instructions. In Claude Code they load with the session by design; in apps that defer MCP tools (OMP, Grok Build) only the names and instructions load until the first call. |
+| Tool schema in your context | 5,179 bytes, about 1,295 tokens | All three tools, plus about 230 tokens of instructions. In Claude Code they load with the session by design; in apps that defer MCP tools (OMP, Grok Build) only the names and instructions load until the first call. |
 | Server start and handshake | 50–60 ms | Local stdio, no network |
 | `pack`: a search, four files and a blocked `.env` | about 8 ms | Median of 5 runs on a 42-file fixture |
 | `ship`: a two-file edit and a `node` verify | about 35 ms | Dominated by starting the verify command |
@@ -416,7 +422,7 @@ An agent that can edit files and run commands deserves fences. These are the one
 | **Read-only `batch`** | The script runs in a separate process started under Node's permission model: no file writes, no child processes, no workers, reads limited to the workspace. It is handed no host objects and none of your environment variables, and it is killed at its time limit. | Node's permission model does not restrict network access on Node 22. `TURNPACK_ALLOW_EXEC=1` turns `ctx.exec` on and the read-only promise off. |
 | **Protected paths** | `ship` never writes a `.turnpack.json` or anything inside a `.git` directory, at any depth, so an edit cannot switch off the allowlist or plant a git hook. On Windows the other spellings of those names (`.git::$INDEX_ALLOCATION`, `.turnpack.json::$DATA`, a trailing dot or space, 8.3 short names) are refused in every tool, so they cannot be used to reach a protected or secret file under a second name. | |
 | **Verify allowlist** | Optional. With `{"enforceVerifyAllowlist": true, "allowedVerify": ["npm test"]}` in `.turnpack.json` at the workspace root, `ship` runs only those exact commands, whichever subdirectory a call names. Extra arguments are refused unless an entry opts in with a trailing ` *`. A broken config file blocks verify rather than disabling the list. | The command runs your project's code, and `ship` can edit that code, including the test script itself. It stops unapproved commands from being launched; it does not stop a hijacked agent from changing what an approved one does. Also: an app that sandboxes the model's shell (Codex does) does not sandbox MCP servers, so a verify command runs outside that sandbox. The app's approval prompt for the tool, and this list, are the gates. |
-| **Rollback** | Byte-exact snapshots taken before the first write, restored when verify fails or times out, and when the server receives SIGINT or SIGTERM mid-verify. New files and the directories created for them are removed. A file that something else changed while verify was running (you saved it in your editor) is left as it is and reported, never overwritten. | Snapshots live in memory, so `kill -9` or a power cut mid-verify leaves the edits in place. Side effects of the verify command itself (a migrated database, generated files) are not undone. `ship` cannot tell your save from a verify command that rewrites the files being shipped (a formatter with `--fix`); either way those files are left and the status is `FAILED_ROLLBACK_PARTIAL`. Keep using git. |
+| **Rollback** | Byte-exact snapshots taken before the first write, restored when verify fails or times out, and when the server receives SIGINT or SIGTERM mid-verify. If the process is ended outright instead (`kill -9`, the app quitting, a power cut), the next Turnpack server to start or handle a call restores the files from a journal on disk, and the model is told what was undone. New files and the directories created for them are removed. A file that something else changed while verify was running (you saved it in your editor) is left as it is and reported, never overwritten. | After a hard kill the edits stay on disk until a Turnpack server starts or handles a call. Side effects of the verify command itself (a migrated database, generated files) are not undone. `ship` cannot tell your save from a verify command that rewrites the files being shipped (a formatter with `--fix`); either way those files are left and the status is `FAILED_ROLLBACK_PARTIAL`. Keep using git. |
 | **Zero dependencies** | `"dependencies": {}`. The whole server is the TypeScript in `src/`. | |
 
 Each fence has tests that attack it: sandbox escapes, path traversal, symlink escapes, Windows path aliases, allowlist smuggling, argument injection, runaway regexes, rollback under a kill signal, a save made while the tests run. They are in [`test/`](test), and `npx turnpack doctor` re-checks the main ones on your machine. The full threat model is in [SECURITY.md](SECURITY.md).
@@ -441,6 +447,12 @@ In the runs we measured, yes: Claude Code with Sonnet 5 and Codex CLI each chose
 **Why not `git stash` or `git checkout` to roll back?**
 `ship` works without git, never touches your index, staging area or unrelated uncommitted changes, restores only the files it changed, and removes the files it created.
 
+**If the tests fail after some edits landed, is the whole call undone?**
+Yes. Every edit is checked before anything is written, the check runs after all of them, and a failure puts every file back, new files and folders included. If the process running the check is killed instead, the next Turnpack server to start puts them back. [docs/behavior.md](docs/behavior.md) has the edge cases.
+
+**Does `ship` run my whole test suite?**
+It runs exactly the `verify` commands it is given, in order, and stops at the first failure. `{files}` in a command becomes the changed files, so `"npx vitest related {files} --run"` tests only what the change touches. Put a fast check first and the full suite after it.
+
 **Is `batch` a sandbox?**
 It is two layers. The script gets a tiny API and no host objects, and it runs in a process that Node itself refuses to let write, spawn or read outside the workspace. Node documents its permission model as a safety net against trusted code doing something unintended rather than a defence against deliberately malicious code, and we describe ours the same way. [SECURITY.md](SECURITY.md) says exactly what is and is not blocked.
 
@@ -457,6 +469,7 @@ Turnpack builds on ideas from Anthropic's programmatic tool calling, Cloudflare'
 ## More
 
 - [Recipes](docs/recipes/01-multi-file-rename.md): multi-file rename, verify allowlist, native Windows, when not to use it
+- [What Turnpack does when a check fails part-way, a process is killed, or a plan changes](docs/behavior.md)
 - [Steering your agent toward the tools](docs/steering.md)
 - [App compatibility matrix](docs/harness-matrix.md)
 - [What Claude Code, Codex, OMP and Grok Build already do without Turnpack](docs/baselines.md)

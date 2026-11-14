@@ -301,7 +301,7 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
 
     const shipped = await call("node check.mjs");
     assert.equal(shipped.status, "SHIPPED_AND_VERIFIED");
-    assert.match(shipped.summary, /3 file\(s\) changed \(lib\/core\/a\.js \(moved from a\.js\), b\.js, check\.mjs\)/);
+    assert.match(shipped.summary, /3 file\(s\) changed: lib\/core\/a\.js \(moved from a\.js, line 1\), b\.js \(line 1\), check\.mjs \(line 1\)\./);
     assert.equal(fs.existsSync(path.join(repoDir, "a.js")), false);
     assert.equal(fs.readFileSync(path.join(repoDir, "lib", "core", "a.js"), "utf8"), "export const A = 10;\n");
 
@@ -505,7 +505,7 @@ describe("ship multi-file edit, verify, and preimage rollback", () => {
       verify: "node check.mjs",
     });
     assert.equal(moved.status, "SHIPPED_AND_VERIFIED");
-    assert.match(moved.summary, /lib\/b\.js \(new\)/);
+    assert.match(moved.summary, /lib\/b\.js \(new, 1 line\)/);
     assert.match(moved.summary, /b\.js \(deleted\)/);
     assert.equal(fs.existsSync(path.join(repoDir, "b.js")), false);
 

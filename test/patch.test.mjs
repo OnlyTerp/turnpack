@@ -191,7 +191,10 @@ describe("ship with a patch", () => {
 
     const shipped = await runShip({ cwd: repoDir, patch: RENAME, verify: ["node check.mjs"] });
     assert.equal(shipped.status, "SHIPPED_AND_VERIFIED");
-    assert.match(shipped.summary, /4 file\(s\) changed \(src\/tax\.js, src\/invoice\.js, src\/notes\.md \(new\), src\/legacy\.js \(deleted\)\)/);
+    assert.match(
+      shipped.summary,
+      /4 file\(s\) changed: src\/tax\.js \(lines? [\d, -]+\), src\/invoice\.js \(lines? [\d, -]+\), src\/notes\.md \(new, 1 line\), src\/legacy\.js \(deleted\)\./,
+    );
     assert.match(read("src/tax.js"), /export function computeTax/);
     assert.equal(read("src/notes.md"), "# Notes\n");
     assert.equal(fs.existsSync(path.join(repoDir, "src", "legacy.js")), false);
@@ -211,7 +214,7 @@ describe("ship with a patch", () => {
       edits: [{ path: "src/invoice.js", search: "./tax.js", replace: "./rates.js" }],
     });
     assert.equal(moved.status, "APPLIED_NO_VERIFY");
-    assert.match(moved.summary, /src\/rates\.js \(moved from src\/tax\.js\), src\/invoice\.js/);
+    assert.match(moved.summary, /src\/rates\.js \(moved from src\/tax\.js, line 1\), src\/invoice\.js \(line \d+\)/);
     assert.equal(fs.existsSync(path.join(repoDir, "src", "tax.js")), false);
     assert.match(read("src/rates.js"), /RATE = 0\.1;/);
 

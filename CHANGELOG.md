@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+### `ship`
+
+- **A call cut off by its process ending is undone.** Before the first write, the original bytes go to a rollback journal on disk. If the process is ended before the outcome is decided (`kill -9`, the app quitting, Windows ending the process, a power cut), the next Turnpack server to start or handle a call restores the files by the same rule as a normal rollback, and the server that next works in that folder tells the model at the top of its reply. Files changed since are left alone. The journal costs a few milliseconds a call. `TURNPACK_STATE_DIR` moves it.
+- **Replies say where each change landed:** `2 file(s) changed: src/tax.js (line 3), src/invoice.js (lines 1, 4).` A new file gives its length. The summary line used to read `2 file(s) changed (src/tax.js, src/invoice.js).`
+- **A failure says what it points at:** which verify commands passed before the one that failed, and whether each file and line the failing output names is one the call changed, another line of a changed file, or a file the call did not touch (usually a caller or a test the change missed). After a rollback the named lines are quoted as the check saw them, since the restored file no longer has them at those numbers.
+- **`{files}` in a verify command** becomes the files the call changed, each quoted: `"npx vitest related {files} --run"`. A verify allowlist entry can contain it. `{files}` inside quotes is refused.
+- **An edit to a file that changed after the model read it** with `pack` is flagged: applied with a note when its text still matches, and refused with "read it again" when it does not.
+- If the app disconnects while a check is running, the server finishes the call, rollback included, before it exits. It used to exit at once.
+
+### Docs
+
+- [docs/behavior.md](docs/behavior.md): what Turnpack does when a check fails part-way, a process is killed, a plan changes after a read or steps depend on each other, and how to keep test runs short.
+
 ## 0.1.0
 
 First release.

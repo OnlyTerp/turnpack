@@ -1,6 +1,15 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+
+// ship keeps a rollback journal in a per-user state folder. Tests keep theirs in a temp folder,
+// shared with every server they start, so a test run never touches the real one.
+if (!process.env.TURNPACK_STATE_DIR) {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "turnpack-state-"));
+  process.env.TURNPACK_STATE_DIR = stateDir;
+  process.on("exit", () => fs.rmSync(stateDir, { recursive: true, force: true }));
+}
 
 export const CLI_PATH = path.resolve(import.meta.dirname, "..", "dist", "cli.js");
 

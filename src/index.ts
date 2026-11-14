@@ -1,5 +1,6 @@
-export { runPack, type PackArgs, type PackFileSpec, type ClientContext } from "./tools/pack.js";
+export { runPack, type PackArgs, type PackFileSpec, type PackHooks, type ClientContext } from "./tools/pack.js";
 export {
+  expandFilesToken,
   isVerifyAllowed,
   runShip,
   type ShipArgs,
@@ -39,6 +40,18 @@ export {
   type RootPolicy,
 } from "./roots.js";
 export { describeChecks, detectChecks, type ProjectCheck } from "./checks.js";
+export {
+  journalDir,
+  openJournal,
+  recoverJournals,
+  takeRecoveryNotes,
+  type Journal,
+  type JournalFile,
+  type JournalInput,
+  type RecoveryNote,
+} from "./journal.js";
+export { changedLineRanges, formatRanges, lineCount, type LineRange } from "./tools/line-diff.js";
+export { pointsAt, type BlameFile } from "./tools/blame.js";
 export { applySearchReplace, type EditOutcome, type MatchHow } from "./tools/edit-match.js";
 export {
   SERVER_INSTRUCTIONS,

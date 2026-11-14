@@ -10,6 +10,7 @@ import {
   resolveWorkspaceRoot,
 } from "../security.js";
 import { describeChecks, detectChecks } from "../checks.js";
+import { openJournal, type Journal } from "../journal.js";
 import {
   isRecord,
   optionalBoolean,
@@ -26,6 +27,8 @@ import {
 import { suggestPaths } from "../workspace.js";
 import { applySearchReplace, HOW_LABEL } from "./edit-match.js";
 import { applyHunks, parsePatch, type PatchFile } from "./patch.js";
+import { pointsAt, type BlameFile } from "./blame.js";
+import { changedLineRanges, formatRanges, lineCount, type LineRange } from "./line-diff.js";
 
 export interface ShipWriteOp {
   path: string;
@@ -467,6 +470,74 @@ function abort(message: string, t0: number): ShipResult {
   };
 }
 
+const FILES_TOKEN = /\{files\}/g;
+
+/** One path as a single shell argument, for the shell `ship` runs verify commands in. */
+function shellArg(relPath: string): string {
+  // A name that starts with "-" would be read as an option.
+  const arg = relPath.startsWith("-") ? `./${relPath}` : relPath;
+  if (process.platform === "win32") {
+    // Inside double quotes cmd.exe treats & | < > ^ as text, but still expands %VAR% and !VAR!.
+    if (/["%!^\u0000-\u001f]/.test(arg)) {
+      throw new Error(`"${relPath}" contains a character that cannot be passed safely to cmd.exe, so {files} cannot name it`);
+    }
+    return `"${arg}"`;
+  }
+  return `'${arg.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Whether a `{files}` in the command sits inside a quoted string. Each name is quoted on its
+ * own, which only holds at the top level of the command line: inside `sh -c "… {files}"` the
+ * outer quotes turn the inner ones into plain characters, and a file name could then carry a
+ * command of its own past the verify allowlist.
+ */
+function filesTokenIsQuoted(command: string): boolean {
+  const posix = process.platform !== "win32";
+  let quote = "";
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i] as string;
+    if (quote) {
+      if (posix && quote === '"' && ch === "\\") i++;
+      else if (ch === quote) quote = "";
+      else if (command.startsWith("{files}", i)) return true;
+      continue;
+    }
+    if (posix && ch === "\\") i++;
+    // cmd.exe has one kind of quote; a POSIX shell has two.
+    else if (ch === '"' || (posix && ch === "'")) quote = ch;
+  }
+  return false;
+}
+
+/**
+ * Replaces `{files}` in a verify command with the files the call leaves changed, each quoted
+ * as one argument. That lets a project check only what was touched: `vitest related {files}
+ * --run`, `jest --findRelatedTests {files}`, `eslint {files}`.
+ */
+export function expandFilesToken(command: string, relPaths: string[]): string {
+  if (!command.includes("{files}")) return command;
+  if (filesTokenIsQuoted(command)) {
+    throw new Error(
+      `verify "${command}" has {files} inside quotes. Write {files} on its own: each file is already quoted as one argument, and quotes around the list would undo that`,
+    );
+  }
+  if (relPaths.length === 0) {
+    throw new Error(`verify "${command}" uses {files}, but this call leaves no changed file to name`);
+  }
+  const list = relPaths.map(shellArg).join(" ");
+  return command.replace(FILES_TOKEN, () => list);
+}
+
+let journalWarned = false;
+function warnJournalOnce(err: unknown): void {
+  if (journalWarned) return;
+  journalWarned = true;
+  process.stderr.write(
+    `turnpack: could not write the rollback journal (${err instanceof Error ? err.message : String(err)}). ship still undoes a check that fails, but not a call cut off by the process stopping.\n`,
+  );
+}
+
 // Argument names, documented one first. Models reach for the names of the edit tools they were
 // trained on (`old_string`, `file_path`, `oldText`); reading those costs nothing, and refusing
 // them costs a turn.
@@ -541,6 +612,12 @@ export interface ShipInternalOptions {
   workspaceRoots?: string[];
   /** Told what ship is doing while it waits on a verify command. */
   onProgress?: (message: string) => void;
+  /**
+   * SHA-256 of each file as the model last saw it in this session (from `pack`), by absolute
+   * path. An edit to a file that has changed since is applied with a note saying so, and the
+   * files a successful call writes are recorded here.
+   */
+  readLedger?: Map<string, string>;
 }
 
 export async function runShip(
@@ -620,6 +697,16 @@ export async function runShip(
   const plansByRel = new Map<string, PlannedWrite>();
   const problems: string[] = [];
   const lenient: string[] = [];
+  const ledger = internalOpts.readLedger;
+  const stale: string[] = [];
+  // An edit is written from what the model last read. If the file has changed since, the edit
+  // can still match (it needs only its own lines), so it is applied, and the model is told.
+  const noteIfStale = (image: Preimage): void => {
+    const seen = ledger?.get(image.absPath);
+    if (seen !== undefined && image.existed && seen !== image.sha256 && !stale.includes(image.relPath)) {
+      stale.push(image.relPath);
+    }
+  };
   const attempt = (run: () => void): void => {
     try {
       run();
@@ -751,6 +838,7 @@ export async function runShip(
         }
         const preimage = earlier?.preimage ?? snapshot(safe);
         if (!earlier && !preimage.existed) throw notFound("Patch target", safe.relPath);
+        if (!earlier) noteIfStale(preimage);
         const bytes = earlier?.nextBytes ?? preimage.bytes;
         const text = bytes.toString("utf8");
         if (!Buffer.from(text, "utf8").equals(bytes)) {
@@ -840,6 +928,7 @@ export async function runShip(
       } else {
         preimage = snapshot(safe);
         if (!preimage.existed) throw notFound("Edit target", safe.relPath);
+        noteIfStale(preimage);
         const expectedSha = optionalString(item.expected_sha256, `ship.edits[${idx}].expected_sha256`);
         if (expectedSha && preimage.sha256 !== expectedSha.toLowerCase()) {
           throw new Error(`Precondition failed for "${safe.relPath}": SHA-256 changed on disk`);
@@ -916,8 +1005,16 @@ export async function runShip(
     }),
   );
 
+  const them = stale.length > 1 ? "them" : "it";
+  // Only the files whose edit did not fit: one that changed but still took its edit is fine.
+  const staleAndBroken = stale.filter((relPath) => problems.some((problem) => problem.includes(relPath)));
+  const staleThem = staleAndBroken.length > 1 ? "them" : "it";
+  const staleAbortNote =
+    staleAndBroken.length > 0
+      ? `\n\n${staleAndBroken.join(", ")} changed on disk after you last read ${staleThem} with pack. Read ${staleThem} again before writing the edit.`
+      : "";
   if (problems.length === 1) {
-    return abort(`${problems[0]}\n\nNothing was written.`, t0);
+    return abort(`${problems[0]}\n\nNothing was written.${staleAbortNote}`, t0);
   }
   if (problems.length > 1) {
     return abort(
@@ -925,7 +1022,7 @@ export async function runShip(
         `${problems.length} problems, nothing was written.`,
         ...problems.map((problem, i) => `${i + 1}. ${problem}`),
         "Fix these and send the whole call again.",
-      ].join("\n\n"),
+      ].join("\n\n") + staleAbortNote,
       t0,
     );
   }
@@ -935,19 +1032,80 @@ export async function runShip(
     return abort("provide at least one write, edit, move, delete, or verify command", t0);
   }
 
-  const describe = (plan: PlannedWrite): string =>
-    plan.nextBytes === null
-      ? `${plan.relPath} (deleted)`
-      : plan.movedFrom
-        ? `${plan.relPath} (moved from ${plan.movedFrom})`
-        : plan.preimage.existed
-          ? plan.relPath
-          : `${plan.relPath} (new)`;
+  // {files} in a verify command becomes the files this call leaves changed, so a project can
+  // check only what was touched.
+  const changedPaths = plans.filter((plan) => plan.nextBytes !== null).map((plan) => plan.relPath);
+  let commands: string[];
+  try {
+    commands = verifyList.map((cmd) => expandFilesToken(cmd, changedPaths));
+  } catch (err) {
+    return abort(`${err instanceof Error ? err.message : String(err)}. Nothing was written.`, t0);
+  }
+
+  // Where each change landed, counted in the file as it is after the call. The reply carries it
+  // so the model need not read the file again to find its edit, and so a failure that names a
+  // line can be matched to the edit that wrote it.
+  const rangesByRel = new Map<string, LineRange[] | null>();
+  const rangesOf = (plan: PlannedWrite): LineRange[] | null => {
+    const known = rangesByRel.get(plan.relPath);
+    if (known !== undefined) return known;
+    let ranges: LineRange[] | null = null;
+    const before = plan.movedFrom
+      ? plansByRel.get(plan.movedFrom)?.preimage.bytes
+      : plan.preimage.existed
+        ? plan.preimage.bytes
+        : Buffer.alloc(0);
+    if (plan.nextBytes !== null && before && before.length + plan.nextBytes.length <= 4 * 1024 * 1024) {
+      const beforeText = before.toString("utf8");
+      const afterText = plan.nextBytes.toString("utf8");
+      if (Buffer.from(beforeText, "utf8").equals(before) && Buffer.from(afterText, "utf8").equals(plan.nextBytes)) {
+        ranges = changedLineRanges(beforeText, afterText);
+      }
+    }
+    rangesByRel.set(plan.relPath, ranges);
+    return ranges;
+  };
+  const describe = (plan: PlannedWrite): string => {
+    if (plan.nextBytes === null) return `${plan.relPath} (deleted)`;
+    const notes: string[] = [];
+    if (plan.movedFrom) notes.push(`moved from ${plan.movedFrom}`);
+    if (!plan.preimage.existed && !plan.movedFrom) {
+      const count = lineCount(plan.nextBytes.toString("utf8"));
+      notes.push(`new, ${count} line${count === 1 ? "" : "s"}`);
+    } else {
+      const where = formatRanges(rangesOf(plan) ?? []);
+      if (where) notes.push(where);
+    }
+    return notes.length > 0 ? `${plan.relPath} (${notes.join(", ")})` : plan.relPath;
+  };
   const fileList = plans.map((p) => p.relPath);
   // A move is one change: it is listed once, under its new name.
   const listed = plans.filter((plan) => !plan.movedTo);
   const changedCount = listed.length;
   const fileSummary = listed.map(describe).join(", ");
+  const changedLine = changedCount > 0 ? `${changedCount} file(s) changed: ${fileSummary}.` : "verify only, no files changed.";
+  const blameFiles = (): BlameFile[] =>
+    plans.map((plan) => {
+      const ranges = plan.nextBytes === null ? [] : rangesOf(plan);
+      return {
+        relPath: plan.relPath,
+        gone: plan.movedTo ? "moved" : plan.nextBytes === null ? "deleted" : undefined,
+        ranges,
+        // Only a call that is about to be undone needs its lines quoted, and only text files
+        // (the ones whose line ranges could be worked out). Never a file that holds secrets.
+        text:
+          shouldRollback && plan.nextBytes !== null && ranges !== null && !isSecretPath(plan.relPath, workspaceRoot)
+            ? plan.nextBytes.toString("utf8")
+            : undefined,
+      };
+    });
+  const recordWrites = (): void => {
+    if (!ledger) return;
+    for (const plan of plans) {
+      if (plan.nextBytes === null) ledger.delete(plan.absPath);
+      else ledger.set(plan.absPath, sha256(plan.nextBytes));
+    }
+  };
   // Said whenever the edits reached the disk or were tried: the model's picture of those files
   // was slightly off, and it should know before it writes the next edit from the same picture.
   const lenientNote =
@@ -956,6 +1114,63 @@ export async function runShip(
           `Note: ${lenient.length} search text(s) did not match the file exactly. Each identified one place without ambiguity, so it was applied there:\n  - ${lenient.join("\n  - ")}`,
         ]
       : [];
+  if (stale.length > 0) {
+    lenientNote.push(
+      `Note: ${stale.join(", ")} changed on disk after you last read ${them} with pack (an edit made with another tool, in an editor, or by another agent). The search text still matched, so the edit was applied, and the check ran against the file as it is now.`,
+    );
+  }
+
+  // The same snapshots, also on disk, so a call cut off by its process stopping (the app quit,
+  // the process was killed, a power cut) is undone by the next turnpack process to start.
+  let journal: Journal | null = null;
+  if (plans.length > 0) {
+    try {
+      const plannedDirs = [
+        ...new Set(
+          plans
+            .filter((plan) => plan.nextBytes !== null)
+            .flatMap((plan) => missingParentDirs(plan.absPath, workspaceRoot)),
+        ),
+      ];
+      journal = openJournal({
+        root: fs.realpathSync(workspaceRoot),
+        files: plans.map((plan) => ({
+          relPath: plan.relPath,
+          absPath: plan.absPath,
+          existed: plan.preimage.existed,
+          bytes: plan.preimage.bytes,
+          sha256: plan.preimage.sha256,
+          mode: plan.preimage.mode,
+          shippedSha256: plan.nextBytes === null ? null : sha256(plan.nextBytes),
+        })),
+        dirs: plannedDirs,
+        deadline: Date.now() + 60000 + commands.length * (timeoutMs + KILL_GRACE_MS + OUTPUT_DRAIN_MS + 5000),
+        keepOnFail: !shouldRollback,
+      });
+    } catch (err) {
+      warnJournalOnce(err);
+    }
+  }
+  /** Settles the journal. False when another turnpack process already put this call's files back. */
+  const settle = (): boolean => {
+    const open = journal;
+    journal = null;
+    return open ? open.close() : true;
+  };
+  /** Whether every file still holds what this call wrote. */
+  const stillOnDisk = (): boolean =>
+    plans.every(
+      (plan) => currentSha(plan.absPath, restoreOps) === (plan.nextBytes === null ? null : sha256(plan.nextBytes)),
+    );
+  const lostToRecovery = (): ShipResult => ({
+    status: "FAILED_AND_ROLLED_BACK",
+    summary:
+      "FAILED_AND_ROLLED_BACK: this call ran past the longest it could take, so another turnpack process took it for one whose process had stopped and put its files back. Nothing from this call is on disk; ship it again.",
+    filesModified: [],
+    verifyPassed: false,
+    rollbackErrors: [],
+    elapsedMs: Math.round(performance.now() - t0),
+  });
 
   // From here on the workspace is modified. If the process is asked to stop while edits are
   // unverified, put the files back first instead of leaving a half-shipped tree behind.
@@ -975,6 +1190,7 @@ export async function runShip(
         `turnpack: ${signal} during ship; ${errors.length === 0 ? `restored ${plans.length} file(s)` : `rollback errors: ${errors.join("; ")}`}\n`,
       );
     }
+    settle();
     removeSignalHandlers();
     process.kill(process.pid, signal);
   };
@@ -1006,6 +1222,7 @@ export async function runShip(
     } catch (err) {
       restored = true;
       const rbErrors = restoreSnapshots(writtenSoFar, createdDirs, restoreOps);
+      settle();
       const status: ShipStatus = rbErrors.length > 0 ? "FAILED_ROLLBACK_PARTIAL" : "FAILED_AND_ROLLED_BACK";
       return {
         status,
@@ -1022,13 +1239,15 @@ export async function runShip(
     }
 
     if (verifyList.length === 0) {
+      if (!settle() && !stillOnDisk()) return lostToRecovery();
+      recordWrites();
       // The one thing that makes ship worth calling was left out. If the project says what its
       // check is, name it, so the next call can use it.
       const checks = describeChecks(detectChecks(workspaceRoot));
       return {
         status: "APPLIED_NO_VERIFY",
         summary: [
-          `APPLIED_NO_VERIFY: ${changedCount} file(s) changed (${fileSummary}). No verify command was given, so nothing was tested.` +
+          `APPLIED_NO_VERIFY: ${changedLine} No verify command was given, so nothing was tested.` +
             (checks ? ` ${checks} Pass it as verify and a change that fails it is undone for you.` : ""),
           ...lenientNote,
         ].join("\n\n"),
@@ -1040,14 +1259,17 @@ export async function runShip(
     }
 
     // Phase 4: verify, one command at a time, stopping at the first failure.
+    if (!shouldRollback) journal?.markVerifying();
     const passedOutputs: string[] = [];
-    for (const cmd of verifyList) {
+    const passedCommands: string[] = [];
+    for (const cmd of commands) {
       internalOpts.onProgress?.(`running ${cmd}`);
       const run = await runVerifyCommand(cmd, workspaceRoot, timeoutMs, (child) => {
         activeChild = child;
       });
       if (run.ok) {
         passedOutputs.push(`$ ${cmd}  (passed)\n${tailText(run.output, PASS_OUTPUT_TAIL_BYTES) || "(no output)"}`);
+        passedCommands.push(cmd);
         continue;
       }
 
@@ -1057,12 +1279,21 @@ export async function runShip(
           ? "could not be started"
           : `exit code ${run.exitCode}`;
       const failedOutput = `$ ${cmd}\n${run.output || "(no output)"}`;
+      // What was tested, and which part of it the failure points at, so the next attempt can
+      // go straight to the edit that broke it.
+      const findings = [
+        ...(passedCommands.length > 0 ? [`Passed before it: ${passedCommands.map((c) => `"${c}"`).join(", ")}.`] : []),
+        ...(plans.length > 0 ? [pointsAt(run.output, blameFiles(), workspaceRoot)] : []),
+      ].filter(Boolean);
 
       if (!shouldRollback) {
+        settle();
+        recordWrites();
         return {
           status: "FAILED_KEPT_ON_DISK",
           summary: [
             `FAILED_KEPT_ON_DISK: verify "${cmd}" failed (${reason}). Changes kept on disk because rollback_on_fail=false: ${fileSummary || "none"}.`,
+            ...findings,
             ...lenientNote,
             failedOutput,
           ].join("\n\n"),
@@ -1074,6 +1305,7 @@ export async function runShip(
       }
 
       const rollbackErrors = restoreOnce();
+      settle();
       const status: ShipStatus =
         rollbackErrors.length > 0 ? "FAILED_ROLLBACK_PARTIAL" : "FAILED_AND_ROLLED_BACK";
       return {
@@ -1083,6 +1315,8 @@ export async function runShip(
           rollbackErrors.length === 0
             ? `Restored ${plans.length} file(s) to byte-exact pre-edit snapshots. The workspace is unchanged; fix the edit and ship again.`
             : `Restored ${plans.length - rollbackErrors.length} of ${plans.length} file(s). Rollback Errors (${rollbackErrors.length}):\n  - ${rollbackErrors.join("\n  - ")}\nThose files are not in their pre-edit state. Read them before shipping again.`,
+          ...(changedCount > 0 ? [`Changed by this call and tested together: ${fileSummary}.`] : []),
+          ...findings,
           ...lenientNote,
           failedOutput,
         ].join("\n\n"),
@@ -1093,11 +1327,15 @@ export async function runShip(
       };
     }
 
+    // Another process took this call for a dead one. What it did with the files depends on what
+    // the record said, so the disk decides what is reported.
+    if (!settle() && !stillOnDisk()) return lostToRecovery();
+    recordWrites();
     const elapsedMs = Math.round(performance.now() - t0);
     return {
       status: "SHIPPED_AND_VERIFIED",
       summary: [
-        `SHIPPED_AND_VERIFIED in ${elapsedMs}ms: ${changedCount} file(s) changed (${fileSummary || "verify-only"}).`,
+        `SHIPPED_AND_VERIFIED in ${elapsedMs}ms: ${changedLine}`,
         ...lenientNote,
         ...passedOutputs,
       ].join("\n\n"),
@@ -1108,5 +1346,11 @@ export async function runShip(
     };
   } finally {
     removeSignalHandlers();
+    // Still open only when something above threw. The edits were not verified, so they do not
+    // stay; the error itself reaches the model.
+    if (journal) {
+      if (shouldRollback) restoreOnce();
+      settle();
+    }
   }
 }
