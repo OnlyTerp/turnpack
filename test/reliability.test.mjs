@@ -159,6 +159,25 @@ describe("pointing a failure at the change", () => {
     assert.match(pointsAt("Cannot find module './old.js'", files, root), /old\.js \(deleted by this call\)/);
   });
 
+  it("reads a file URL, where a space or a tilde in the folder name is written as %20 or %7E", () => {
+    const spaced = process.platform === "win32" ? "C:\\my work\\app~1" : "/my work/app~1";
+    const url = pathToFileURL(path.join(spaced, "src", "a.js")).href;
+    assert.match(url, /%20/);
+    assert.match(pointsAt(`${url}:11\n  two();\nSyntaxError: nope`, files, spaced), /src\/a\.js:11 \(a line this call changed\)/);
+    assert.match(
+      pointsAt(`    at f (${url}:40:3)`, files, spaced),
+      /src\/a\.js:40 \(not a line this call changed\)/,
+    );
+  });
+
+  it("does not take another folder whose path ends like the project's for the project", () => {
+    if (process.platform === "win32") return;
+    assert.equal(
+      pointsAt(`/mnt/backup${root}/src/a.js:11 failed`, files, root),
+      "The failing output does not mention any file this call changed.",
+    );
+  });
+
   it("quotes the named lines when it is given the file as the check saw it", () => {
     const withText = [{ relPath: "src/a.js", ranges: [[2, 2]], text: "one\n  two();\nthree\n" }];
     assert.equal(
@@ -287,6 +306,32 @@ describe("ship replies say where each change landed and what a failure points at
     assert.equal(res.status, "FAILED_AND_ROLLED_BACK");
     // The error names a.js as the module that lacks the export, and check.mjs as where it failed.
     assert.match(res.summary, /It also names check\.mjs:1, a file this call did not change\./);
+  });
+
+  it("points at the right lines when the project folder has a space or a tilde in its name", async () => {
+    // Node names a failing ES module by URL, with the space as %20 and the tilde as %7E.
+    const spaced = fs.mkdtempSync(path.join(os.tmpdir(), "turnpack rel~1 "));
+    try {
+      fs.writeFileSync(path.join(spaced, "a.js"), "export const A = 1;\nexport const keep = true;\n");
+      fs.writeFileSync(path.join(spaced, "check.mjs"), "import { A } from './a.js'; if (A !== 10) process.exit(1);\n");
+      const broken = await runShip({
+        cwd: spaced,
+        edits: [{ path: "a.js", search: "export const keep = true;", replace: "export const keep = ;" }],
+        verify: ["node check.mjs"],
+      });
+      assert.equal(broken.status, "FAILED_AND_ROLLED_BACK");
+      assert.match(broken.summary, /The failing output mentions a\.js:2 \(a line this call changed\)/);
+      assert.match(broken.summary, / {2}a\.js:2 \| export const keep = ;/);
+
+      const renamed = await runShip({
+        cwd: spaced,
+        edits: [{ path: "a.js", search: "export const A = 1;", replace: "export const AA = 1;" }],
+        verify: ["node check.mjs"],
+      });
+      assert.match(renamed.summary, /It also names check\.mjs:1, a file this call did not change\./);
+    } finally {
+      await removeDir(spaced);
+    }
   });
 
   it("passes the changed files to a verify command that asks for {files}", async () => {
