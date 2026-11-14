@@ -21,7 +21,7 @@
   </g>
 
   <text x="144" y="80" fill="#F8FAFC" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="24" font-weight="800" letter-spacing="-0.4">turnpack</text>
-  <text x="144" y="102" fill="#10B981" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">v0.1.0  ·  LOCAL MCP  ·  CLAUDE CODE · CODEX · CHATGPT · OMP · GROK</text>
+  <text x="144" y="102" fill="#10B981" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" font-weight="700">v0.2.0  ·  LOCAL MCP  ·  CLAUDE CODE · CODEX · CHATGPT · OMP · GROK</text>
 
   <text x="74" y="172" fill="#F8FAFC" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="36" font-weight="800" letter-spacing="-0.8">Edits that are tested before they stay.</text>
   <text x="74" y="212" fill="#94A3B8" font-family="Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="18.5" font-weight="400">One call reads what your agent needs. One call edits across files and runs</text>
